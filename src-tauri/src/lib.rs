@@ -1,0 +1,16 @@
+mod db;
+mod notebook;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            db::execute_sql,
+            notebook::save_notebook,
+            notebook::load_notebook,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
