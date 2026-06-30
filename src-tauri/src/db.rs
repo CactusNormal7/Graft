@@ -4,6 +4,7 @@
 //! database at the given path, runs one statement, and returns a structured
 //! result the frontend can render in a table.
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::time::Instant;
 
@@ -97,4 +98,40 @@ async fn run(db_path: &str, sql: &str) -> Result<QueryResult, sqlx::Error> {
 #[tauri::command]
 pub async fn execute_sql(db_path: String, sql: String) -> Result<QueryResult, String> {
     run(&db_path, &sql).await.map_err(|e| e.to_string())
+}
+
+async fn introspect(db_path: &str) -> Result<BTreeMap<String, Vec<String>>, sqlx::Error> {
+    let options = SqliteConnectOptions::from_str(db_path)?.create_if_missing(true);
+    let pool = SqlitePool::connect_with(options).await?;
+
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master \
+         WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
+         ORDER BY name",
+    )
+    .fetch_all(&pool)
+    .await?;
+
+    let mut schema = BTreeMap::new();
+    for table in tables {
+        // PRAGMA table_info columns: cid, name, type, notnull, dflt_value, pk.
+        let escaped = table.replace('"', "\"\"");
+        let rows = sqlx::query(&format!("PRAGMA table_info(\"{escaped}\")"))
+            .fetch_all(&pool)
+            .await?;
+        let columns = rows.iter().map(|r| r.get::<String, _>("name")).collect();
+        schema.insert(table, columns);
+    }
+
+    pool.close().await;
+    Ok(schema)
+}
+
+/// Introspect the SQLite database at `db_path`, returning a map of
+/// table/view name → column names. Used to power editor autocompletion.
+#[tauri::command]
+pub async fn introspect_schema(
+    db_path: String,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
+    introspect(&db_path).await.map_err(|e| e.to_string())
 }
