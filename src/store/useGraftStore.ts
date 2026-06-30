@@ -10,8 +10,15 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import type { BlockType, NotebookFile, QueryResult, SqlBlockData } from "../types";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import type {
+  BlockType,
+  DbType,
+  NotebookFile,
+  QueryResult,
+  RecentProject,
+  SqlBlockData,
+} from "../types";
 
 /** A canvas node whose data is a SQL block. */
 export type SqlNode = Node<SqlBlockData, "sqlBlock">;
@@ -28,23 +35,70 @@ const DEFAULT_SQL: Record<BlockType, string> = {
   script: "-- script",
 };
 
+/** Which top-level screen is shown (see the wireframe). */
+export type View = "home" | "canvas";
+
+// --- Recent projects, persisted in localStorage -----------------------------
+const RECENTS_KEY = "graft.recentProjects";
+const RECENTS_MAX = 12;
+
+function loadRecents(): RecentProject[] {
+  try {
+    const raw = localStorage.getItem(RECENTS_KEY);
+    return raw ? (JSON.parse(raw) as RecentProject[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistRecents(list: RecentProject[]) {
+  try {
+    localStorage.setItem(RECENTS_KEY, JSON.stringify(list));
+  } catch {
+    /* localStorage unavailable — non-fatal */
+  }
+}
+
 interface GraftState {
+  view: View;
   nodes: SqlNode[];
   edges: Edge[];
-  /** Path to the connected SQLite database, or null if none. */
+
+  // Current project
+  projectName: string | null;
+  /** Absolute path to the current `.graft` file, or null if unsaved. */
+  projectPath: string | null;
+  dbType: DbType;
+  /** Path to the connected database file (SQLite), or null if none. */
   dbPath: string | null;
+
+  /** Introspected schema: table/view name → column names (for autocompletion). */
+  schema: Record<string, string[]>;
+
+  recentProjects: RecentProject[];
 
   onNodesChange: (changes: NodeChange<SqlNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
 
+  goHome: () => void;
+  createProject: (
+    name: string,
+    dir: string,
+    dbType: DbType,
+    dbPathOverride?: string | null,
+  ) => Promise<void>;
+  openProjectByPath: (projectPath: string) => Promise<void>;
+  openProjectFromDialog: () => Promise<void>;
+  removeRecent: (projectPath: string) => void;
+
+  refreshSchema: () => Promise<void>;
   addBlock: (blockType: BlockType) => void;
   updateSql: (id: string, sql: string) => void;
   runBlock: (id: string) => Promise<void>;
+  runAll: () => Promise<void>;
 
-  connectDatabase: () => Promise<void>;
   saveNotebook: () => Promise<void>;
-  loadNotebook: () => Promise<void>;
 }
 
 /** Immutably patch the data of a single node. */
@@ -58,10 +112,33 @@ function patchNode(
   );
 }
 
+/** Build the on-disk notebook shape from the current state. */
+function serializeNotebook(state: GraftState): NotebookFile {
+  return {
+    version: 1,
+    name: state.projectName ?? "untitled",
+    dbType: state.dbType,
+    dbPath: state.dbPath,
+    nodes: state.nodes.map((n) => ({
+      id: n.id,
+      position: n.position,
+      // Reset transient execution state so saved files stay diff-friendly.
+      data: { ...n.data, status: "idle", result: null, error: null },
+    })),
+    edges: state.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+  };
+}
+
 export const useGraftStore = create<GraftState>((set, get) => ({
+  view: "home",
   nodes: [],
   edges: [],
+  projectName: null,
+  projectPath: null,
+  dbType: "sqlite",
   dbPath: null,
+  schema: {},
+  recentProjects: loadRecents(),
 
   onNodesChange: (changes) =>
     set({ nodes: applyNodeChanges(changes, get().nodes) }),
@@ -69,6 +146,109 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     set({ edges: applyEdgeChanges(changes, get().edges) }),
   onConnect: (connection) =>
     set({ edges: addEdge(connection, get().edges) }),
+
+  goHome: () => set({ view: "home" }),
+
+  removeRecent: (projectPath) => {
+    const next = get().recentProjects.filter((p) => p.projectPath !== projectPath);
+    persistRecents(next);
+    set({ recentProjects: next });
+  },
+
+  createProject: async (name, dir, dbType, dbPathOverride) => {
+    const paths = await invoke<{ projectPath: string; dbPath: string }>(
+      "create_project_paths",
+      { dir, name },
+    );
+    // SQLite: use the chosen existing/explicit file if given, else create
+    // <name>.db next to the project. Other engines have no file path (v0.3).
+    const dbPath =
+      dbType === "sqlite"
+        ? dbPathOverride && dbPathOverride.trim()
+          ? dbPathOverride.trim()
+          : paths.dbPath
+        : null;
+
+    set({
+      view: "canvas",
+      nodes: [],
+      edges: [],
+      projectName: name,
+      projectPath: paths.projectPath,
+      dbType,
+      dbPath,
+    });
+
+    // Persist the (empty) project immediately so it is reopenable.
+    await invoke("save_notebook", {
+      path: paths.projectPath,
+      contents: JSON.stringify(serializeNotebook(get()), null, 2),
+    });
+    touchRecent(get, set, {
+      name,
+      projectPath: paths.projectPath,
+      dbType,
+      dbPath,
+    });
+    void get().refreshSchema();
+  },
+
+  openProjectByPath: async (projectPath) => {
+    try {
+      const contents = await invoke<string>("load_notebook", { path: projectPath });
+      const file = JSON.parse(contents) as NotebookFile;
+      set({
+        view: "canvas",
+        projectName: file.name ?? "untitled",
+        projectPath,
+        dbType: file.dbType ?? "sqlite",
+        dbPath: file.dbPath,
+        nodes: file.nodes.map((n) => ({
+          id: n.id,
+          type: "sqlBlock",
+          position: n.position,
+          data: n.data,
+        })),
+        edges: file.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+      });
+      touchRecent(get, set, {
+        name: file.name ?? "untitled",
+        projectPath,
+        dbType: file.dbType ?? "sqlite",
+        dbPath: file.dbPath,
+      });
+      void get().refreshSchema();
+    } catch (err) {
+      console.error("Failed to open project:", err);
+      // Prune a project file that no longer exists / can't be read.
+      get().removeRecent(projectPath);
+      alert(`Could not open project:\n${projectPath}\n\n${String(err)}`);
+    }
+  },
+
+  openProjectFromDialog: async () => {
+    const path = await openDialog({
+      multiple: false,
+      directory: false,
+      title: "Open project",
+      filters: [{ name: "Graft project", extensions: ["graft"] }],
+    });
+    if (typeof path === "string") await get().openProjectByPath(path);
+  },
+
+  refreshSchema: async () => {
+    const { dbPath } = get();
+    if (!dbPath) {
+      set({ schema: {} });
+      return;
+    }
+    try {
+      const schema = await invoke<Record<string, string[]>>("introspect_schema", { dbPath });
+      set({ schema });
+    } catch (err) {
+      console.error("introspect_schema:", err);
+    }
+  },
 
   addBlock: (blockType) => {
     const count = get().nodes.length;
@@ -101,7 +281,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       set({
         nodes: patchNode(nodes, id, {
           status: "error",
-          error: "No database connected. Click “Connect SQLite…” first.",
+          error: "No database connected for this project.",
         }),
       });
       return;
@@ -114,12 +294,10 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         sql: node.data.sql,
       });
       set({
-        nodes: patchNode(get().nodes, id, {
-          status: "success",
-          result,
-          error: null,
-        }),
+        nodes: patchNode(get().nodes, id, { status: "success", result, error: null }),
       });
+      // DDL may have changed the schema — refresh autocompletion data.
+      if (/\b(create|alter|drop)\b/i.test(node.data.sql)) void get().refreshSchema();
     } catch (err) {
       set({
         nodes: patchNode(get().nodes, id, {
@@ -131,59 +309,42 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     }
   },
 
-  connectDatabase: async () => {
-    const selected = await openDialog({
-      multiple: false,
-      directory: false,
-      title: "Connect to SQLite database",
-      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
-    });
-    if (typeof selected === "string") set({ dbPath: selected });
+  runAll: async () => {
+    // Sequential so results land predictably and we don't hammer the pool.
+    for (const node of get().nodes) {
+      await get().runBlock(node.id);
+    }
   },
 
   saveNotebook: async () => {
-    const path = await saveDialog({
-      title: "Save notebook",
-      defaultPath: "notebook.graft",
-      filters: [{ name: "Graft notebook", extensions: ["graft"] }],
+    const { projectPath } = get();
+    if (!projectPath) return; // projects always have a path once created
+    await invoke("save_notebook", {
+      path: projectPath,
+      contents: JSON.stringify(serializeNotebook(get()), null, 2),
     });
-    if (!path) return;
-
-    const { nodes, edges, dbPath } = get();
-    const file: NotebookFile = {
-      version: 1,
-      dbPath,
-      nodes: nodes.map((n) => ({
-        id: n.id,
-        position: n.position,
-        // Reset transient execution state so saved files stay diff-friendly.
-        data: { ...n.data, status: "idle", result: null, error: null },
-      })),
-      edges: edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
-    };
-    await invoke("save_notebook", { path, contents: JSON.stringify(file, null, 2) });
-  },
-
-  loadNotebook: async () => {
-    const path = await openDialog({
-      multiple: false,
-      directory: false,
-      title: "Open notebook",
-      filters: [{ name: "Graft notebook", extensions: ["graft"] }],
-    });
-    if (typeof path !== "string") return;
-
-    const contents = await invoke<string>("load_notebook", { path });
-    const file = JSON.parse(contents) as NotebookFile;
-    set({
-      dbPath: file.dbPath,
-      nodes: file.nodes.map((n) => ({
-        id: n.id,
-        type: "sqlBlock",
-        position: n.position,
-        data: n.data,
-      })),
-      edges: file.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
+    touchRecent(get, set, {
+      name: get().projectName ?? "untitled",
+      projectPath,
+      dbType: get().dbType,
+      dbPath: get().dbPath,
     });
   },
 }));
+
+/** Insert/update a recent-project entry, move it to the top, and persist. */
+function touchRecent(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  entry: Omit<RecentProject, "modifiedAt">,
+) {
+  const without = get().recentProjects.filter(
+    (p) => p.projectPath !== entry.projectPath,
+  );
+  const next = [{ ...entry, modifiedAt: new Date().toISOString() }, ...without].slice(
+    0,
+    RECENTS_MAX,
+  );
+  persistRecents(next);
+  set({ recentProjects: next });
+}
