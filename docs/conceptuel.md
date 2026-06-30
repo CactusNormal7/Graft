@@ -89,8 +89,9 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
 
 - **v0.1 (POC)** — canvas + blocs SQL déplaçables, connexion SQLite locale,
   exécution inline, sauvegarde notebook JSON. ✅ *en place*
-- **v0.2** — Monaco intégré, autocomplétion (tables/colonnes), coloration
-  syntaxique, erreurs inline.
+- **v0.2** — éditeur riche **CodeMirror 6** (coloration, autocomplétion
+  tables/colonnes, Ctrl/Cmd+Entrée), erreurs inline. 🔶 *en cours* (l'éditeur,
+  la coloration et l'autocomplétion schéma SQLite sont en place).
 - **v0.3** — explorateur de schéma, connexions visuelles blocs ↔ tables,
   support Postgres + MySQL.
 - **v1.0** — UX canvas peaufinée (zoom, groupes, zones nommées), types de blocs

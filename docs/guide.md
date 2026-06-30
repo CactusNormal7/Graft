@@ -36,20 +36,47 @@ immédiatement ; une modif dans `src-tauri/` recompile le Rust.
 
 ## 4. Utiliser Graft
 
-1. **Connect SQLite…** (barre du haut) → choisis un fichier `.db` / `.sqlite`.
-   S'il n'existe pas, il est **créé automatiquement**. Le nom de la base
-   connectée s'affiche ensuite dans le bouton.
-2. **Add block** → choisis un type (`query`, `migration`, `procedure`,
+### Écran d'accueil
+Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un récent.
+
+- **+ New project** → ouvre une **modale** :
+  - **Nom** du projet,
+  - **Emplacement** (par défaut `~/Documents/Graft`, modifiable + *Browse*),
+  - **Type de base** (SQLite ; PostgreSQL/MySQL arrivent en v0.3).
+  - **Database file (SQLite)** : *Browse* pour pointer un fichier `.db`/`.sqlite`
+    **existant** (ex. `data/sample.db`), ou laisse vide pour créer un nouveau
+    `<nom>.db` à côté du projet.
+  À la validation, le projet est **créé et sauvegardé immédiatement**
+  (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas.
+- **Projets récents** → liste persistée ; clique pour **rouvrir**, ✕ pour retirer
+  de la liste.
+- **Open file…** → ouvre un `.graft` existant où qu'il soit.
+
+> Seul **SQLite** est fonctionnel en v0.1 (multi-moteur en v0.3).
+
+> 💡 Base d'exemple fournie : **`data/sample.db`** (tables `users`, `orders`,
+> `products` avec des données). Tu peux créer un projet pointant dessus, ou pointer
+> un nouveau projet vers ce fichier.
+
+### Le canvas
+1. **+ Block** (toolbar) → choisis un type (`query`, `migration`, `procedure`,
    `trigger`, `view`, `script`). Le bloc apparaît sur le canvas.
-3. Écris ton SQL dans le bloc, puis clique **▶ Run**.
+2. Écris ton SQL dans le bloc (coloration syntaxique + **autocomplétion** des
+   tables/colonnes de ta base et des mots-clés SQL), puis exécute :
+   - clique **▶**, ou
+   - **Ctrl/Cmd + Entrée** quand le curseur est dans le bloc.
+   Résultats :
    - Une requête de lecture affiche une **table de résultats** (+ nb de lignes
      et temps en ms).
    - Une écriture/DDL affiche le **nombre de lignes affectées**.
    - Une erreur s'affiche en rouge dans le bloc.
+3. **▶ Run all** (toolbar) exécute tous les blocs dans l'ordre.
 4. **Déplace** les blocs librement, **relie-les** en tirant depuis le point de
    connexion droit vers le point gauche d'un autre bloc.
 5. **Save** → enregistre le canvas dans un fichier `.graft` (JSON).
-   **Open** → recharge un `.graft` existant.
+   Le clic sur **graft** (en haut à gauche) revient à l'accueil.
+6. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
+   en bas à droite.
 
 ### Navigation sur le canvas
 - **Déplacer la vue** : glisser le fond.

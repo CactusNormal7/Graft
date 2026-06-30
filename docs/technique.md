@@ -11,7 +11,7 @@
 | Shell | **Tauri 2** (Rust) | binaires légers vs Electron, drivers DB natifs en Rust |
 | Frontend | **React 19 + TypeScript + Vite** | intégration officielle Tauri, pas de besoins SSR |
 | Canvas | **React Flow** (`@xyflow/react`) | vrai modèle nœuds/arêtes pour les connexions blocs ↔ schéma |
-| Éditeur SQL | `textarea` (v0.1) → **Monaco** (v0.2) | l'éditeur riche arrive en v0.2 |
+| Éditeur SQL | **CodeMirror 6** (`@uiw/react-codemirror` + `@codemirror/lang-sql`) | léger pour N éditeurs sur le canvas ; coloration + autocomplétion schéma natives (préféré à Monaco) |
 | État | **Zustand** | évite les re-renders en cascade du Context API |
 | Drivers DB | **sqlx** — **Postgres + MySQL + SQLite** | API async unifiée multi-moteur |
 
@@ -46,8 +46,33 @@ Graft cible une **application desktop classique**, pas un canvas plein écran :
 - **Canvas** comme surface centrale parmi d'autres (console SQL, grille de
   données, diagrammes…), pas comme l'application entière.
 
-> Le squelette v0.1 (canvas quasi nu) est **à revoir** pour intégrer cette
-> coquille. Le design détaillé passera par Claude Design.
+> Le squelette v0.1 minimal a été **revu** : la coquille (toolbar + sidebar +
+> canvas + status bar) et l'écran d'accueil sont implémentés d'après le wireframe
+> Claude Design (cf. § Design system).
+
+### Design system
+
+Le design system vit dans **Claude Design** (projet « Wireframe application
+design », design system `graft-design-system`) et est **miroité** dans le repo :
+
+- **Tokens** : `src/styles/tokens/*.css` (colors, typography, spacing, elevation,
+  blocks, data), thèmes **dark** (défaut) **et light** via l'attribut
+  `[data-theme]` sur `<html>`. Densité **compact**/**comfortable** via
+  `[data-density]`. Les deux attributs sont posés dans `main.tsx`.
+- **Composants/coquille** : `src/styles/app.css` traduit les styles inline du
+  wireframe en classes (`.toolbar`, `.sidebar`, `.statusbar`, `.card`,
+  `.btn`/`.btn-accent`, `.badge--<type>`, `.dot-grid`, `.sql-block`,
+  `.result-table`, etc.) bâties sur les tokens.
+- **Police** : **JetBrains Mono** appliquée partout (parti pris « terminal/dev »
+  du wireframe), **bundlée via `@fontsource/jetbrains-mono`** (400/500/600/700)
+  — pas de Google Fonts au runtime, l'app doit marcher hors-ligne.
+- **Synchronisation** : accès via le MCP `claude_design` (skill `/design-sync`).
+  Toute évolution du DS dans Claude Design doit être répercutée dans
+  `src/styles/tokens/`. Détails et lien projet en mémoire (`design-system`).
+
+> Le wireframe décrit aussi des éléments **pas encore fonctionnels** rendus en
+> placeholder : explorateur de schéma (introspection v0.3), connexions
+> Postgres/MySQL (v0.3), graphiques, palette de commandes ⌘K, minimap riche.
 
 ## Arborescence
 
@@ -59,16 +84,29 @@ Graft/
 ├── tsconfig.json
 ├── docs/                     # documentation vivante (ce dossier)
 ├── src/                      # frontend React
-│   ├── main.tsx              # bootstrap React + import du CSS React Flow
-│   ├── App.tsx               # <ReactFlowProvider> + <GraftCanvas>
-│   ├── App.css               # thème sombre, styles blocs/toolbar/table
+│   ├── main.tsx              # bootstrap : fonts + tokens + CSS React Flow + thème
+│   ├── App.tsx               # routeur de vue (home / canvas) + coquille
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
 │   ├── store/
-│   │   └── useGraftStore.ts  # store Zustand (nodes, edges, dbPath, actions)
+│   │   └── useGraftStore.ts  # store Zustand (view, nodes, edges, dbPath, actions)
+│   ├── styles/
+│   │   ├── app.css           # classes de la coquille + composants (issu du wireframe)
+│   │   └── tokens/           # design tokens (miroir du DS Claude Design)
+│   │       ├── colors.css    # surfaces, texte, accent, sémantiques (dark + light)
+│   │       ├── typography.css# familles, échelle, graisses
+│   │       ├── spacing.css   # grille 4px, hauteurs, rayons, densité
+│   │       ├── elevation.css # ombres, focus ring, z-index
+│   │       ├── blocks.css    # couleur par type de bloc
+│   │       └── data.css      # couleurs grille de données (null, types, diff)
+│   ├── screens/
+│   │   └── HomeScreen.tsx    # écran d'accueil (connexions, quick connect, récents)
+│   ├── components/
+│   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
+│   │   ├── Sidebar.tsx       # explorateur de schéma (placeholder) + liste des blocs
+│   │   └── StatusBar.tsx     # barre de statut bas
 │   └── canvas/
-│       ├── GraftCanvas.tsx   # <ReactFlow> + Background/Controls/MiniMap
+│       ├── GraftCanvas.tsx   # <ReactFlow> + dot-grid + Controls/MiniMap + empty state
 │       ├── SqlBlockNode.tsx  # nœud custom : header, éditeur, Run, résultats
-│       ├── Toolbar.tsx       # barre : connexion DB, ajout de blocs, save/open
 │       └── ResultTable.tsx   # rendu d'un result set en table
 └── src-tauri/                # backend Rust (Tauri)
     ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
@@ -78,7 +116,7 @@ Graft/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri + enregistrement des commandes
         ├── db.rs             # moteur d'exécution SQLite (execute_sql)
-        └── notebook.rs       # save_notebook / load_notebook (fichiers .graft)
+        └── notebook.rs       # save/load .graft + default_project_dir / create_project_paths
 ```
 
 ## Flux de données
@@ -97,21 +135,52 @@ Graft/
    revient au store, qui met le bloc en `success` (ou `error`) et déclenche le
    rendu inline (`ResultTable` ou message d'erreur).
 
-### Persistance (notebook `.graft`)
-- **Save** : `saveNotebook()` ouvre un dialogue (plugin dialog), sérialise
-  `{ version, dbPath, nodes, edges }` en JSON indenté, puis `invoke("save_notebook")`
-  écrit le fichier. L'état d'exécution transitoire (status/result/error) est
-  remis à zéro avant écriture → fichiers diff-friendly.
-- **Open** : `loadNotebook()` lit le JSON via `invoke("load_notebook")` et
-  reconstruit nodes/edges + `dbPath` dans le store.
+### Projets (création / ouverture / sauvegarde)
+Un **projet** = un fichier `.graft` + une connexion (type + base). Cycle de vie :
+
+- **Créer** (`createProject(name, dir, dbType)`) : `create_project_paths` dérive
+  `<dir>/<name>.graft` et `<dir>/<name>.db` (join natif cross-platform) ; le store
+  passe en `canvas` avec un canevas vide, puis **écrit immédiatement le `.graft`**
+  (`save_notebook`) → le projet est persisté dès sa création. La modale propose un
+  emplacement par défaut (`default_project_dir` = `<Documents|Home>/Graft`) et un
+  *Browse* (dialogue dossier).
+- **Sauvegarder** (`saveNotebook()`) : écrit dans le `projectPath` courant **sans
+  dialogue** (le projet a toujours un chemin). L'état d'exécution transitoire
+  (status/result/error) est remis à zéro avant écriture → fichiers diff-friendly.
+- **Ouvrir** : `openProjectByPath(path)` (clic sur un récent) ou
+  `openProjectFromDialog()` (Open file…) lit le JSON via `load_notebook` et
+  reconstruit `name`/`dbType`/`dbPath`/nodes/edges. Si le fichier est illisible,
+  l'entrée est purgée des récents.
+
+### Projets récents
+Liste persistée dans **`localStorage`** (`graft.recentProjects`, max 12) :
+`{ name, projectPath, dbType, dbPath, modifiedAt }`. Mise à jour (remontée en tête)
+à chaque création / ouverture / sauvegarde. Affichée sur l'accueil, réouvrable au
+clic, supprimable (✕).
+
+### Éditeur SQL & autocomplétion
+- **`src/components/SqlEditor.tsx`** : CodeMirror 6 (dialecte SQLite), coloration
+  syntaxique, **autocomplétion** (mots-clés + tables/colonnes via le `schema`),
+  et raccourci **`Mod-Enter` (Ctrl/Cmd+Entrée)** pour exécuter le bloc focalisé
+  (keymap en `Prec.highest`).
+- **Schéma** : `store.schema` (`Record<table, colonnes[]>`) alimenté par la
+  commande `introspect_schema`. Rafraîchi à la **création/ouverture** d'un projet
+  et après un statement **DDL** réussi (`CREATE`/`ALTER`/`DROP`). Passé tel quel à
+  `@codemirror/lang-sql` comme `schema`.
+- Le nœud (`SqlBlockNode`) garde aussi le bouton **▶** ; les deux appellent
+  `runBlock(id)`.
 
 ## Commandes Tauri exposées (`lib.rs`)
 
 | Commande | Signature | Rôle |
 |----------|-----------|------|
 | `execute_sql` | `(db_path: String, sql: String) -> Result<QueryResult, String>` | exécute un statement SQLite |
+| `introspect_schema` | `(db_path: String) -> Result<{table: [colonnes]}, String>` | schéma SQLite (tables/vues + colonnes) pour l'autocomplétion |
 | `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
+| `path_exists` | `(path: String) -> bool` | teste l'existence d'un fichier (purge des récents) |
+| `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
+| `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | dérive `.graft`/`.db` (join cross-platform) |
 
 > Convention : `db_path`/`sql` côté Rust (snake_case) ↔ `dbPath`/`sql` côté JS
 > (Tauri convertit automatiquement le camelCase en snake_case).
@@ -121,6 +190,8 @@ Graft/
 ```jsonc
 {
   "version": 1,
+  "name": "analytics",
+  "dbType": "sqlite",                      // sqlite | postgres | mysql
   "dbPath": "/chemin/vers/base.sqlite",   // ou null
   "nodes": [
     {
@@ -186,7 +257,10 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 
 ## Écarts assumés en v0.1
 
-- Éditeur = `textarea` (Monaco prévu v0.2).
+- Éditeur = **CodeMirror 6** (coloration + autocomplétion schéma + Ctrl/Cmd+Entrée)
+  — une partie de la v0.2 est donc déjà là.
+- Autocomplétion alimentée par l'introspection **SQLite** uniquement (Postgres/MySQL
+  en v0.3).
 - Seul **SQLite** est branché (Postgres/MySQL en v0.3) — mais `sqlx` est déjà
   choisi pour une API unifiée.
 - Les arêtes entre blocs sont dessinables mais n'ont pas encore de sémantique

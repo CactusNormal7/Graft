@@ -15,7 +15,7 @@ Current phase: v0.1 (proof of concept) — initial codebase scaffolded and build
 - **Shell**: Tauri (Rust). Not Electron — smaller binaries, and DB drivers run natively in Rust instead of through a Node backend.
 - **Frontend**: React + TypeScript + Vite. Not Next.js — Next solves web problems (SSR, server routing) that don't exist in a local Tauri webview; Vite is the official Tauri integration.
 - **Canvas**: React Flow. Not tldraw — Graft's blocks need a real nodes/edges graph model (block ↔ schema object connections), which is React Flow's core domain. tldraw is better suited to freeform whiteboard/annotation, which is not the primary need here.
-- **SQL editor**: Monaco Editor. Tradeoff still open vs. CodeMirror 6 (lighter, but more manual LSP integration) — see Open Questions.
+- **SQL editor**: CodeMirror 6 (`@uiw/react-codemirror` + `@codemirror/lang-sql`). Chosen over Monaco: the canvas embeds many small editors (one per block), where Monaco's per-instance weight is costly, while CodeMirror is light and ships schema-aware SQL autocompletion + highlighting out of the box. (Resolves the former open question.)
 - **SQL LSP**: sql-language-server (joe-re, Node) — covers Postgres, MySQL, and SQLite natively in one LSP, unlike postgres-language-server (Supabase/postgrestools) which is Postgres-only but more robust (built on libpg_query). Possible future migration to postgres-language-server for Postgres-specific users.
 - **DB connections**: native Rust drivers in the Tauri backend. `sqlx` recommended for a unified async API across Postgres/MySQL/SQLite rather than juggling separate crates per engine.
 - **State management**: Zustand. Avoids the cascading re-renders Context API causes with per-block state (position, execution status, results).
@@ -31,7 +31,6 @@ Current phase: v0.1 (proof of concept) — initial codebase scaffolded and build
 - Block granularity: one block = one SQL statement? one migration file? one "subject" (everything touching a given table)?
 - Business model: open source core + paid pro features, vs. fully commercial?
 - Persistence: local `.graft` files (JSON, Git-diff-friendly) vs. embedded SQLite (better for the full-text search across blocks already planned as a core feature) — possibly both
-- Monaco vs. CodeMirror 6 for the SQL editor
 - GraphQL: whether/how to support it. Leaning: viable as a *feature* (generate/expose a GraphQL API from the schema, à la PostGraphile/Hasura) but only as a late, optional module tied to the schema explorer; reject as an internal frontend↔backend transport (Tauri IPC already covers that). See `docs/technique.md` § GraphQL.
 
 ## Living documentation (maintenance rule — always follow)
@@ -41,6 +40,9 @@ The `docs/` folder holds the project's living documentation, in French, kept in 
 - `docs/conceptuel.md` — conceptual explanation (vision, audience, differentiator, block model, non-goals, open questions)
 - `docs/technique.md` — technical explanation (architecture, stack, file layout, data flow, persistence format, build/run)
 - `docs/guide.md` — user guide (install, launch, day-to-day usage)
+- `docs/design-brief.md` — design-system intent brief
+
+The design system itself lives in **Claude Design** (project "Wireframe application design") and is mirrored in `src/styles/tokens/*.css` + `src/styles/app.css`; access/sync via the `claude_design` MCP (`/design-sync`). Font: JetBrains Mono bundled via `@fontsource` (no CDN). Themes via `[data-theme]`, density via `[data-density]`. Keep the mirrored tokens in sync when the DS changes (see the `design-system` memory).
 
 **Rule:** whenever you modify the project (features, architecture, stack, file layout, build steps, usage), update the relevant `docs/` file(s) in the same change so they never drift from reality. Treat these docs as part of "done" — a change is not complete until the docs reflect it. Keep them in French.
 
