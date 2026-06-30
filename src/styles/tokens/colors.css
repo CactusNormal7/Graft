@@ -1,0 +1,107 @@
+/* =============================================================================
+   GRAFT — Color Tokens
+   Dark theme (default) + Light theme override
+   Source: Claude Design "graft-design-system" — keep in sync with that project.
+   ============================================================================= */
+
+/* ---- Dark Theme (default) ---- */
+:root {
+  /* --- Base surfaces (elevation stack) --- */
+  --bg:        #0f1117;   /* canvas / app background */
+  --panel:     #1a1d27;   /* primary panel surface */
+  --panel-2:   #232733;   /* elevated / header surface */
+  --panel-3:   #2c3040;   /* raised controls, hover targets */
+
+  /* --- Borders --- */
+  --border:    #2d3242;   /* default border */
+  --border-2:  #3d4357;   /* strong border / separator */
+
+  /* --- Text --- */
+  --text:      #e6e8ee;   /* primary text */
+  --text-2:    #b8bece;   /* secondary text */
+  --muted:     #8b91a3;   /* muted / placeholder */
+  --muted-2:   #5a6070;   /* very muted / disabled text */
+
+  /* --- Accent / interactive --- */
+  --accent:    #6ea8fe;   /* primary interactive */
+  --accent-hover: #8bbeff; /* accent hover */
+  --accent-dim: #1f3a5f;  /* accent surface / bg */
+  --accent-text: #9ec5ff; /* accent text on dark bg */
+
+  /* --- Semantic: Success --- */
+  --success:       #4ade80;
+  --success-hover: #6ee79a;
+  --success-dim:   #14402f;
+  --success-text:  #8affc0;
+
+  /* --- Semantic: Warning --- */
+  --warning:       #f59e0b;
+  --warning-hover: #fbb033;
+  --warning-dim:   #4a2f10;
+  --warning-text:  #ffce8a;
+
+  /* --- Semantic: Error / Danger --- */
+  --error:       #ff6b6b;
+  --error-hover: #ff8585;
+  --error-dim:   #2a1518;
+  --error-text:  #ffa8a8;
+
+  /* --- Semantic: Info --- */
+  --info:       #38bdf8;
+  --info-hover: #60cafd;
+  --info-dim:   #0f2a3f;
+  --info-text:  #7dd3fa;
+
+  /* --- Neutrals (used for default badges, empty states) --- */
+  --neutral-dim:  #394150;
+  --neutral-text: #cfd5e3;
+
+  /* --- Code editor surface --- */
+  --editor-bg: #12141c;
+}
+
+/* ---- Light Theme ---- */
+[data-theme="light"] {
+  --bg:        #eef0f5;
+  --panel:     #ffffff;
+  --panel-2:   #f3f5fa;
+  --panel-3:   #e8ebf2;
+
+  --border:    #d4d8e8;
+  --border-2:  #bbc0d0;
+
+  --text:      #1a1d27;
+  --text-2:    #3c4256;
+  --muted:     #5f6578;
+  --muted-2:   #8d93a5;
+
+  --accent:    #2f6bdf;
+  --accent-hover: #1d58c9;
+  --accent-dim:   #dbe8ff;
+  --accent-text:  #1a4eba;
+
+  --success:       #16a34a;
+  --success-hover: #15803d;
+  --success-dim:   #dcfce7;
+  --success-text:  #14532d;
+
+  --warning:       #d97706;
+  --warning-hover: #b45309;
+  --warning-dim:   #fef3c7;
+  --warning-text:  #92400e;
+
+  --error:       #dc2626;
+  --error-hover: #b91c1c;
+  --error-dim:   #fee2e2;
+  --error-text:  #991b1b;
+
+  --info:       #0284c7;
+  --info-hover: #0369a1;
+  --info-dim:   #e0f2fe;
+  --info-text:  #075985;
+
+  --neutral-dim:  #e5e7ef;
+  --neutral-text: #3c4256;
+
+  --editor-bg: #f7f8fc;
+}

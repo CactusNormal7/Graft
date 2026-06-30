@@ -1,0 +1,75 @@
+/* =============================================================================
+   GRAFT — Block Type Color Tokens
+   One accent color per SQL block type: desaturated, readable on dark panels.
+   Source: Claude Design "graft-design-system" — keep in sync with that project.
+   ============================================================================= */
+
+:root {
+  /* query — blue */
+  --block-query-bg:     #1f3a5f;
+  --block-query-text:   #9ec5ff;
+  --block-query-border: #2d5fa0;
+  --block-query-accent: #6ea8fe;
+
+  /* migration — amber */
+  --block-migration-bg:     #4a2f10;
+  --block-migration-text:   #ffce8a;
+  --block-migration-border: #7a5020;
+  --block-migration-accent: #f59e0b;
+
+  /* procedure — purple */
+  --block-procedure-bg:     #2f1f4a;
+  --block-procedure-text:   #c9a8ff;
+  --block-procedure-border: #5030a0;
+  --block-procedure-accent: #a78bfa;
+
+  /* trigger — pink/rose */
+  --block-trigger-bg:     #4a1f2f;
+  --block-trigger-text:   #ff9eb5;
+  --block-trigger-border: #80304a;
+  --block-trigger-accent: #fb7185;
+
+  /* view — green */
+  --block-view-bg:     #14402f;
+  --block-view-text:   #8affc0;
+  --block-view-border: #1a6040;
+  --block-view-accent: #4ade80;
+
+  /* script — olive/sage */
+  --block-script-bg:     #333a2f;
+  --block-script-text:   #d2ffa8;
+  --block-script-border: #4a5c38;
+  --block-script-accent: #a3e635;
+}
+
+[data-theme="light"] {
+  --block-query-bg:     #dbe8ff;
+  --block-query-text:   #1a4eba;
+  --block-query-border: #aac1f0;
+  --block-query-accent: #2f6bdf;
+
+  --block-migration-bg:     #fef3c7;
+  --block-migration-text:   #92400e;
+  --block-migration-border: #fcd34d;
+  --block-migration-accent: #d97706;
+
+  --block-procedure-bg:     #ede9fe;
+  --block-procedure-text:   #4c1d95;
+  --block-procedure-border: #c4b5fd;
+  --block-procedure-accent: #7c3aed;
+
+  --block-trigger-bg:     #ffe4e6;
+  --block-trigger-text:   #881337;
+  --block-trigger-border: #fda4af;
+  --block-trigger-accent: #e11d48;
+
+  --block-view-bg:     #dcfce7;
+  --block-view-text:   #14532d;
+  --block-view-border: #86efac;
+  --block-view-accent: #16a34a;
+
+  --block-script-bg:     #ecfccb;
+  --block-script-text:   #365314;
+  --block-script-border: #bef264;
+  --block-script-accent: #65a30d;
+}

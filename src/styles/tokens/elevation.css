@@ -1,0 +1,44 @@
+/* =============================================================================
+   GRAFT — Elevation & Shadow Tokens
+   Flat IDE aesthetic: elevation via surface color + thin borders.
+   Shadows used only for floating elements (toolbar, popovers, modals).
+   Source: Claude Design "graft-design-system" — keep in sync with that project.
+   ============================================================================= */
+
+:root {
+  /* --- Shadow scale (very subtle — flat IDE look) --- */
+  --shadow-none: none;
+  --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.20);
+  --shadow-md:   0 4px 12px rgba(0, 0, 0, 0.28);
+  --shadow-lg:   0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-xl:   0 16px 40px rgba(0, 0, 0, 0.45);
+
+  /* --- Floating-element shadow (toolbar, panels, popovers) --- */
+  --shadow-float:   0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-modal:   0 12px 40px rgba(0, 0, 0, 0.50);
+  --shadow-tooltip: 0 2px 8px  rgba(0, 0, 0, 0.40);
+
+  /* --- Focus ring --- */
+  --focus-ring:       0 0 0 2px var(--accent);
+  --focus-ring-error: 0 0 0 2px var(--error);
+
+  /* --- Z-index stack --- */
+  --z-canvas:   0;
+  --z-node:     10;
+  --z-toolbar:  100;
+  --z-sidebar:  200;
+  --z-dropdown: 300;
+  --z-popover:  400;
+  --z-modal:    500;
+  --z-toast:    600;
+  --z-tooltip:  700;
+}
+
+[data-theme="light"] {
+  --shadow-sm:    0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md:    0 4px 12px rgba(0, 0, 0, 0.12);
+  --shadow-lg:    0 8px 24px rgba(0, 0, 0, 0.15);
+  --shadow-xl:    0 16px 40px rgba(0, 0, 0, 0.18);
+  --shadow-float: 0 4px 20px rgba(0, 0, 0, 0.14);
+  --shadow-modal: 0 12px 40px rgba(0, 0, 0, 0.22);
+}

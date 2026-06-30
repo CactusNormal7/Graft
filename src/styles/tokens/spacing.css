@@ -1,0 +1,64 @@
+/* =============================================================================
+   GRAFT — Spacing & Layout Tokens
+   4px base grid. Compact UI: toolbars 28–32px, table rows 22–26px.
+   Source: Claude Design "graft-design-system" — keep in sync with that project.
+   ============================================================================= */
+
+:root {
+  /* --- Spacing scale (multiples of 4px) --- */
+  --space-0:  0px;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* --- Component heights (compact / comfortable) --- */
+  --h-toolbar:      30px;   /* compact toolbar */
+  --h-toolbar-c:    36px;   /* comfortable toolbar */
+  --h-row:          24px;   /* compact table row */
+  --h-row-c:        28px;   /* comfortable table row */
+  --h-input:        28px;   /* compact input */
+  --h-input-c:      32px;   /* comfortable input */
+  --h-button-sm:    22px;
+  --h-button:       28px;
+  --h-button-lg:    34px;
+  --h-status-bar:   22px;
+  --h-sidebar:      100%;
+
+  /* --- Width tokens --- */
+  --w-sidebar:       220px;
+  --w-sidebar-sm:    180px;
+  --w-sidebar-lg:    260px;
+  --w-block:         320px;  /* default SQL block width */
+  --w-block-wide:    480px;  /* wide SQL block */
+  --w-command-palette: 560px;
+
+  /* --- Border radii --- */
+  --radius-sm:   4px;   /* tight: badges, chips */
+  --radius-md:   6px;   /* buttons, inputs, cells */
+  --radius-lg:   8px;   /* cards, dropdowns */
+  --radius-xl:   10px;  /* panels, modals, blocks */
+  --radius-full: 9999px; /* pills */
+
+  /* --- Density mode: compact (default) --- */
+  --density-pad-x: var(--space-2);   /* 8px */
+  --density-pad-y: var(--space-1);   /* 4px */
+  --density-row-h: var(--h-row);     /* 24px */
+  --density-toolbar-h: var(--h-toolbar); /* 30px */
+  --density-font: var(--text-base);  /* 12px */
+}
+
+/* Comfortable density override */
+[data-density="comfortable"] {
+  --density-pad-x: var(--space-3);
+  --density-pad-y: var(--space-2);
+  --density-row-h: var(--h-row-c);
+  --density-toolbar-h: var(--h-toolbar-c);
+  --density-font: var(--text-md);
+}
