@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local databases / datasets — kept out of git (some exceed GitHub's 100 MB
+# limit). Devs supply their own sample DB locally.
+data/
