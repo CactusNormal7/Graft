@@ -17,11 +17,25 @@ import type {
   NotebookFile,
   QueryResult,
   RecentProject,
+  ResultBlockData,
+  ResultView,
   SqlBlockData,
 } from "../types";
 
 /** A canvas node whose data is a SQL block. */
 export type SqlNode = Node<SqlBlockData, "sqlBlock">;
+
+/** A canvas node whose data is the linked result of a SQL block. */
+export type ResultNode = Node<ResultBlockData, "resultBlock">;
+
+/** Anything that can live on the canvas. */
+export type AnyNode = SqlNode | ResultNode;
+
+const isSqlNode = (n: AnyNode): n is SqlNode => n.type === "sqlBlock";
+const isResultNode = (n: AnyNode): n is ResultNode => n.type === "resultBlock";
+
+/** Default new-block dimensions (persisted only after user resize). */
+const DEFAULT_BLOCK_WIDTH = 360;
 
 let nodeSeq = 0;
 const nextId = () => `block-${Date.now()}-${nodeSeq++}`;
@@ -61,7 +75,7 @@ function persistRecents(list: RecentProject[]) {
 
 interface GraftState {
   view: View;
-  nodes: SqlNode[];
+  nodes: AnyNode[];
   edges: Edge[];
 
   // Current project
@@ -81,7 +95,7 @@ interface GraftState {
 
   recentProjects: RecentProject[];
 
-  onNodesChange: (changes: NodeChange<SqlNode>[]) => void;
+  onNodesChange: (changes: NodeChange<AnyNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
 
@@ -100,6 +114,9 @@ interface GraftState {
   addBlock: (blockType: BlockType) => void;
   updateSql: (id: string, sql: string) => void;
   updateTitle: (id: string, title: string) => void;
+  setResultView: (id: string, view: ResultView) => void;
+  setEmitToBlock: (id: string, enabled: boolean) => void;
+  resizeBlock: (id: string, width: number, height: number) => void;
   duplicateBlock: (id: string) => void;
   deleteBlock: (id: string) => void;
   setFocusedBlock: (id: string | null) => void;
@@ -109,26 +126,28 @@ interface GraftState {
   saveNotebook: () => Promise<void>;
 }
 
-/** Immutably patch the data of a single node. */
+/** Immutably patch the data of a single node (works for any node kind — the
+ *  caller is responsible for passing keys valid for that node's data). */
 function patchNode(
-  nodes: SqlNode[],
+  nodes: AnyNode[],
   id: string,
-  patch: Partial<SqlBlockData>,
-): SqlNode[] {
+  patch: Record<string, unknown>,
+): AnyNode[] {
   return nodes.map((n) =>
-    n.id === id ? { ...n, data: { ...n.data, ...patch } } : n,
+    n.id === id ? ({ ...n, data: { ...n.data, ...patch } } as AnyNode) : n,
   );
 }
 
 /** Build the on-disk notebook shape from the current state. */
 function serializeNotebook(state: GraftState): NotebookFile {
   return {
-    version: 1,
+    version: 2,
     name: state.projectName ?? "untitled",
     dbType: state.dbType,
     dbPath: state.dbPath,
     nodes: state.nodes.map((n) => ({
       id: n.id,
+      type: n.type,
       position: n.position,
       // Reset transient execution state so saved files stay diff-friendly.
       data: { ...n.data, status: "idle", result: null, error: null },
@@ -212,12 +231,22 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         projectPath,
         dbType: file.dbType ?? "sqlite",
         dbPath: file.dbPath,
-        nodes: file.nodes.map((n) => ({
-          id: n.id,
-          type: "sqlBlock",
-          position: n.position,
-          data: n.data,
-        })),
+        nodes: file.nodes.map((n) => {
+          const kind = n.type ?? "sqlBlock";
+          const d = n.data as SqlBlockData & ResultBlockData;
+          // Restore persisted dimensions so React Flow reapplies them.
+          const dims = {
+            ...(d.width ? { width: d.width } : {}),
+            ...(d.height ? { height: d.height } : {}),
+          };
+          return {
+            id: n.id,
+            type: kind,
+            position: n.position,
+            data: n.data,
+            ...dims,
+          } as AnyNode;
+        }),
         edges: file.edges.map((e) => ({ id: e.id, source: e.source, target: e.target })),
       });
       touchRecent(get, set, {
@@ -260,14 +289,15 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   addBlock: (blockType) => {
+    const sqlCount = get().nodes.filter(isSqlNode).length;
     const count = get().nodes.length;
     const node: SqlNode = {
       id: nextId(),
       type: "sqlBlock",
       // Stagger new blocks so they don't stack exactly on top of each other.
-      position: { x: 80 + (count % 4) * 360, y: 80 + Math.floor(count / 4) * 280 },
+      position: { x: 80 + (count % 4) * 400, y: 80 + Math.floor(count / 4) * 280 },
       data: {
-        title: `${blockType[0].toUpperCase()}${blockType.slice(1)} ${count + 1}`,
+        title: `${blockType[0].toUpperCase()}${blockType.slice(1)} ${sqlCount + 1}`,
         blockType,
         sql: DEFAULT_SQL[blockType],
         status: "idle",
@@ -284,9 +314,36 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   updateTitle: (id, title) =>
     set({ nodes: patchNode(get().nodes, id, { title }) }),
 
+  setResultView: (id, view) =>
+    set({ nodes: patchNode(get().nodes, id, { resultView: view }) }),
+
+  setEmitToBlock: (id, enabled) => {
+    const nodes = get().nodes;
+    const src = nodes.find((n) => n.id === id);
+    if (!src || !isSqlNode(src)) return;
+    set({
+      nodes: patchNode(nodes, id, { emitToBlock: enabled }),
+    });
+  },
+
+  resizeBlock: (id, width, height) => {
+    // Persist dims in data (for save/load) AND on the RF node (for RF to apply).
+    const nodes = get().nodes.map((n) =>
+      n.id === id
+        ? ({
+            ...n,
+            width,
+            height,
+            data: { ...n.data, width, height },
+          } as AnyNode)
+        : n,
+    );
+    set({ nodes });
+  },
+
   duplicateBlock: (id) => {
     const src = get().nodes.find((n) => n.id === id);
-    if (!src) return;
+    if (!src || !isSqlNode(src)) return;
     const copy: SqlNode = {
       id: nextId(),
       type: "sqlBlock",
@@ -297,15 +354,32 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         status: "idle",
         result: null,
         error: null,
+        // Don't share the linked result block; the copy starts unlinked.
+        linkedResultId: null,
       },
     };
     set({ nodes: [...get().nodes, copy] });
   },
 
   deleteBlock: (id) => {
-    const nodes = get().nodes.filter((n) => n.id !== id);
-    // Drop any dangling edges that referenced the deleted node.
-    const edges = get().edges.filter((e) => e.source !== id && e.target !== id);
+    const all = get().nodes;
+    const target = all.find((n) => n.id === id);
+    // If deleting a source block, cascade-delete its linked result block.
+    // If deleting a result block, unlink it from its source.
+    const idsToRemove = new Set<string>([id]);
+    let nodes = all;
+    if (target && isSqlNode(target) && target.data.linkedResultId) {
+      idsToRemove.add(target.data.linkedResultId);
+    } else if (target && isResultNode(target)) {
+      const src = all.find((n) => n.id === target.data.sourceId);
+      if (src && isSqlNode(src)) {
+        nodes = patchNode(nodes, src.id, { linkedResultId: null });
+      }
+    }
+    nodes = nodes.filter((n) => !idsToRemove.has(n.id));
+    const edges = get().edges.filter(
+      (e) => !idsToRemove.has(e.source) && !idsToRemove.has(e.target),
+    );
     set({
       nodes,
       edges,
@@ -318,7 +392,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   runBlock: async (id) => {
     const { dbPath, nodes } = get();
     const node = nodes.find((n) => n.id === id);
-    if (!node) return;
+    if (!node || !isSqlNode(node)) return;
 
     if (!dbPath) {
       set({
@@ -330,24 +404,28 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       return;
     }
 
+    // Route: if emitToBlock, results flow into a linked result block; else
+    // embedded in the source block's footer.
+    const routed = node.data.emitToBlock === true;
+
     set({ nodes: patchNode(get().nodes, id, { status: "running", error: null }) });
+    // Ensure the linked block exists (spawn it before execution so its
+    // "running" state is visible immediately).
+    if (routed) ensureLinkedResult(get, set, node);
+
     try {
       const result = await invoke<QueryResult>("execute_sql", {
         dbPath,
         sql: node.data.sql,
       });
-      set({
-        nodes: patchNode(get().nodes, id, { status: "success", result, error: null }),
-      });
+      writeRunResult(get, set, id, { status: "success", result, error: null });
       // DDL may have changed the schema — refresh autocompletion data.
       if (/\b(create|alter|drop)\b/i.test(node.data.sql)) void get().refreshSchema();
     } catch (err) {
-      set({
-        nodes: patchNode(get().nodes, id, {
-          status: "error",
-          result: null,
-          error: String(err),
-        }),
+      writeRunResult(get, set, id, {
+        status: "error",
+        result: null,
+        error: String(err),
       });
     }
   },
@@ -355,7 +433,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   runAll: async () => {
     // Sequential so results land predictably and we don't hammer the pool.
     for (const node of get().nodes) {
-      await get().runBlock(node.id);
+      if (isSqlNode(node)) await get().runBlock(node.id);
     }
   },
 
@@ -374,6 +452,93 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     });
   },
 }));
+
+/** Ensure the given SQL block has a companion resultBlock + connecting edge.
+ *  Called before `execute_sql` so the linked block shows "running" state
+ *  immediately. Idempotent — reuses an existing linked block. */
+function ensureLinkedResult(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  src: SqlNode,
+) {
+  const state = get();
+  const existing = src.data.linkedResultId
+    ? state.nodes.find((n) => n.id === src.data.linkedResultId)
+    : undefined;
+
+  if (existing) {
+    // Mark it as running for user feedback.
+    set({
+      nodes: patchNode(state.nodes, existing.id, {
+        status: "running",
+        error: null,
+      }),
+    });
+    return;
+  }
+
+  // Position the new block to the right of the source.
+  const srcWidth = (src.width ?? src.data.width ?? DEFAULT_BLOCK_WIDTH) as number;
+  const newId = nextId();
+  const resultNode: ResultNode = {
+    id: newId,
+    type: "resultBlock",
+    position: { x: src.position.x + srcWidth + 60, y: src.position.y },
+    data: {
+      sourceId: src.id,
+      sourceTitle: src.data.title,
+      status: "running",
+      result: null,
+      error: null,
+    },
+  };
+  const edge: Edge = {
+    id: `edge-${src.id}-${newId}`,
+    source: src.id,
+    target: newId,
+  };
+
+  set({
+    nodes: [
+      ...patchNode(state.nodes, src.id, { linkedResultId: newId }),
+      resultNode,
+    ],
+    edges: [...state.edges, edge],
+  });
+}
+
+/** Write execution result to the source block OR its linked result block. */
+function writeRunResult(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  sourceId: string,
+  patch: {
+    status: "success" | "error";
+    result?: QueryResult | null;
+    error?: string | null;
+  },
+) {
+  const state = get();
+  const src = state.nodes.find((n) => n.id === sourceId);
+  if (!src || !isSqlNode(src)) return;
+
+  const routed = src.data.emitToBlock === true;
+  const targetId =
+    routed && src.data.linkedResultId ? src.data.linkedResultId : sourceId;
+
+  let nodes = patchNode(state.nodes, targetId, patch);
+  // Also mirror source status so its header dot stays in sync even when the
+  // payload was routed elsewhere. Don't overwrite the routed target's data.
+  if (targetId !== sourceId) {
+    nodes = patchNode(nodes, sourceId, { status: patch.status, error: null });
+    // Keep the linked block's title in sync with the source title.
+    const s = nodes.find((n) => n.id === sourceId);
+    if (s && isSqlNode(s)) {
+      nodes = patchNode(nodes, targetId, { sourceTitle: s.data.title });
+    }
+  }
+  set({ nodes });
+}
 
 /** Insert/update a recent-project entry, move it to the top, and persist. */
 function touchRecent(

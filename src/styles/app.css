@@ -31,6 +31,40 @@ button {
 }
 
 /* ---------------------------------------------------------------------------
+   Custom scrollbars (WebView2 / Chromium)
+   Thin, dark, low-key — replaces the chunky native Windows scrollbar.
+   --------------------------------------------------------------------------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-2) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-2);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
    App shell layout
    --------------------------------------------------------------------------- */
 .app-shell {
@@ -264,6 +298,7 @@ button {
 .badge--trigger   { background: var(--block-trigger-bg);   color: var(--block-trigger-text);   border-color: var(--block-trigger-border); }
 .badge--view      { background: var(--block-view-bg);      color: var(--block-view-text);      border-color: var(--block-view-border); }
 .badge--script    { background: var(--block-script-bg);    color: var(--block-script-text);    border-color: var(--block-script-border); }
+.badge--result    { background: var(--panel-3);              color: var(--muted);                border-color: var(--border-2); }
 
 /* ---------------------------------------------------------------------------
    Dot-grid canvas background
@@ -474,15 +509,39 @@ button {
    SQL block node (React Flow custom node)
    --------------------------------------------------------------------------- */
 .sql-block {
-  width: var(--w-block);
+  /* Fills the React Flow node wrapper — dimensions come from RF (default via
+   * min-* below, custom via NodeResizer persisted in the store). */
+  width: 100%;
+  height: 100%;
+  min-width: var(--w-block);
+  min-height: 160px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .sql-block.selected {
   border: 2px solid var(--accent);
+}
+
+.sql-block__editor-wrap {
+  flex: 0 0 auto;
+}
+
+/* NodeResizer styling — subtle unless block is selected */
+.sql-block__resize-line {
+  border-color: var(--accent);
+  border-width: 1px;
+}
+
+.sql-block__resize-handle {
+  background: var(--accent);
+  border: 1px solid var(--panel);
+  width: 8px;
+  height: 8px;
 }
 
 .sql-block__title {
@@ -563,6 +622,12 @@ button {
   color: var(--warning);
 }
 
+.sql-block__footer--info {
+  background: var(--accent-dim);
+  border-top: 1px solid var(--accent);
+  color: var(--accent);
+}
+
 .sql-block__error {
   margin: 0;
   padding: 8px 12px;
@@ -578,9 +643,19 @@ button {
    Result table
    --------------------------------------------------------------------------- */
 .sql-block__result {
+  /* Auto-height blocks: cap so the editor stays visible. When the block has an
+   * explicit height, the source overrides max-height inline and lets the area
+   * grow to fill the leftover space. */
   max-height: 220px;
   overflow: auto;
   border-top: 1px solid var(--border);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.sql-block__result--flex {
+  /* Used inside a linked result block — the whole card is the result. */
+  max-height: none;
 }
 
 .result-table {
@@ -626,6 +701,341 @@ button {
 
 .result-table tbody tr:hover td:not(.result-table__rownum) {
   background: var(--panel-2);
+}
+
+/* ---------------------------------------------------------------------------
+   Result — records view (one card per row, no horizontal scroll)
+   --------------------------------------------------------------------------- */
+.result-records {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+}
+
+.result-record {
+  display: flex;
+  gap: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font-size: var(--text-sm);
+}
+
+.result-record__index {
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  padding-top: 1px;
+  min-width: 22px;
+  text-align: right;
+  user-select: none;
+}
+
+.result-record__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.result-record__field {
+  display: grid;
+  grid-template-columns: minmax(60px, 30%) 1fr;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.result-record__key {
+  color: var(--data-header-text);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-record__val {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  cursor: text;
+}
+
+.result-record__val.is-number { color: var(--data-number-text); }
+.result-record__val.is-null em { color: var(--data-null-text); font-style: italic; }
+
+/* ---------------------------------------------------------------------------
+   Result — nested view (JSON-like tree from joined rows)
+   --------------------------------------------------------------------------- */
+.result-nested {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+}
+
+.result-nested__group {
+  display: flex;
+  gap: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+
+.result-nested__index {
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  padding-top: 1px;
+  min-width: 22px;
+  text-align: right;
+  user-select: none;
+}
+
+.result-nested__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.result-nested__field {
+  display: grid;
+  grid-template-columns: minmax(70px, 30%) 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: var(--text-sm);
+}
+
+.result-nested__key {
+  color: var(--data-header-text);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-nested__sub {
+  border-left: 2px solid var(--accent-dim);
+  padding: 4px 0 4px 8px;
+  margin-top: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.result-nested__sub-title {
+  color: var(--accent-text);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.result-nested__count {
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 6px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.result-nested__sub-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 2px;
+}
+
+.result-nested__array {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.result-nested__item {
+  display: flex;
+  gap: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+}
+
+.result-nested__item-index {
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  min-width: 16px;
+  text-align: right;
+  user-select: none;
+}
+
+.result-nested__empty {
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+  padding: 2px 0;
+}
+
+/* JSON-tree interactions — carets, item heads, expand/collapse toolbar */
+.result-nested__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 2px;
+  border-bottom: 1px solid var(--panel-2);
+  margin-bottom: 4px;
+}
+
+.result-nested__tbtn {
+  padding: 1px 6px;
+  font-size: var(--text-xs);
+}
+
+.result-nested__sub-title--btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  color: var(--accent-text);
+  font-family: var(--font-mono);
+  text-align: left;
+  width: fit-content;
+}
+
+.result-nested__sub-title--btn:hover {
+  background: var(--panel);
+}
+
+.result-nested__caret {
+  color: var(--muted-2);
+  font-size: 9px;
+  width: 10px;
+  display: inline-block;
+  text-align: center;
+}
+
+.result-nested__item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 3px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-align: left;
+  width: 100%;
+}
+
+.result-nested__item-head:hover {
+  background: var(--panel-2);
+}
+
+.result-nested__item-summary {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.result-nested__item {
+  padding: 0;
+  gap: 0;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.result-nested__item .result-nested__sub-fields {
+  padding: 3px 8px 6px 22px;
+}
+
+/* ---------------------------------------------------------------------------
+   Icon-button "on" state (used by the view toggle in the block header)
+   --------------------------------------------------------------------------- */
+.btn.is-on {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------------------
+   Right-click context menu (portaled to <body>)
+   --------------------------------------------------------------------------- */
+.ctx-menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  min-width: 190px;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-family: var(--font-mono);
+}
+
+.ctx-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 5px 9px;
+  border-radius: var(--radius-sm);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  text-align: left;
+  width: 100%;
+}
+
+.ctx-menu__item:hover:not(:disabled) {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.ctx-menu__item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ctx-menu__item.is-danger {
+  color: var(--error);
+}
+
+.ctx-menu__item.is-danger:hover:not(:disabled) {
+  background: var(--error-dim);
+  color: var(--error);
+}
+
+.ctx-menu__label {
+  flex: 1;
+}
+
+.ctx-menu__shortcut {
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+}
+
+.ctx-menu__sep {
+  height: 1px;
+  background: var(--border);
+  margin: 3px 4px;
 }
 
 /* ---------------------------------------------------------------------------

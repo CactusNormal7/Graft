@@ -20,6 +20,15 @@ export interface QueryResult {
 export type ExecStatus = "idle" | "running" | "success" | "error";
 
 /**
+ * How the query result is rendered:
+ *  - "table"   : classic spreadsheet
+ *  - "records" : one card per row, key/value lines (no horizontal scroll)
+ *  - "nested"  : group flat join results back into a JSON-like tree using
+ *                column-alias conventions (`parent.child`, `array[].field`)
+ */
+export type ResultView = "table" | "records" | "nested";
+
+/**
  * Data carried by each SQL block node on the canvas. The index signature
  * satisfies React Flow v12's `Record<string, unknown>` node-data constraint.
  */
@@ -30,6 +39,33 @@ export interface SqlBlockData {
   status: ExecStatus;
   result: QueryResult | null;
   error: string | null;
+  resultView?: ResultView;
+  /** When true, runBlock writes the result into a linked result block
+   *  instead of embedding it in the source block's footer. */
+  emitToBlock?: boolean;
+  /** Id of the linked result block, if one has been spawned. */
+  linkedResultId?: string | null;
+  /** Persisted block dimensions (set by NodeResizer). Height is optional so
+   *  blocks can auto-grow until the user explicitly resizes vertically. */
+  width?: number;
+  height?: number;
+  [key: string]: unknown;
+}
+
+/**
+ * Data carried by a "result" node — a read-only companion block that
+ * displays the last result of a source SQL block. Created on demand when
+ * `SqlBlockData.emitToBlock` is true.
+ */
+export interface ResultBlockData {
+  sourceId: string;
+  sourceTitle: string;
+  status: ExecStatus;
+  result: QueryResult | null;
+  error: string | null;
+  resultView?: ResultView;
+  width?: number;
+  height?: number;
   [key: string]: unknown;
 }
 
@@ -38,14 +74,18 @@ export type DbType = "sqlite" | "postgres" | "mysql";
 
 /** On-disk shape of a `.graft` notebook file (JSON, Git-diff-friendly). */
 export interface NotebookFile {
-  version: 1;
+  /** Bumped to 2 when linked result blocks + `type` field were added.
+   *  Loader tolerates version 1 (no `type` → treated as sqlBlock). */
+  version: 1 | 2;
   name: string;
   dbType: DbType;
   dbPath: string | null;
   nodes: Array<{
     id: string;
+    /** Absent in v1 files (all nodes were sqlBlock). */
+    type?: "sqlBlock" | "resultBlock";
     position: { x: number; y: number };
-    data: SqlBlockData;
+    data: SqlBlockData | ResultBlockData;
   }>;
   edges: Array<{ id: string; source: string; target: string }>;
 }

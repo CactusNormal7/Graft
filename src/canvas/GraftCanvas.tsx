@@ -8,6 +8,7 @@ import {
 } from "@xyflow/react";
 import { useGraftStore } from "../store/useGraftStore";
 import { SqlBlockNode } from "./SqlBlockNode";
+import { ResultBlockNode } from "./ResultBlockNode";
 
 /** The infinite canvas hosting all SQL blocks (wireframe screens 02/03). */
 export function GraftCanvas() {
@@ -18,7 +19,10 @@ export function GraftCanvas() {
   const onConnect = useGraftStore((s) => s.onConnect);
   const addBlock = useGraftStore((s) => s.addBlock);
 
-  const nodeTypes = useMemo(() => ({ sqlBlock: SqlBlockNode }), []);
+  const nodeTypes = useMemo(
+    () => ({ sqlBlock: SqlBlockNode, resultBlock: ResultBlockNode }),
+    [],
+  );
 
   return (
     <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
