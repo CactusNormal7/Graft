@@ -76,8 +76,24 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 3. **Actions par bloc** dans le header :
    - **Double-clic sur le titre** → renommer (Entrée pour valider, Échap pour
      annuler).
+   - **☰ / ⊞ / ❯** cycle la vue du résultat entre **table**, **records** (une
+     carte par ligne, plus de scroll horizontal) et **nested** (arbre
+     JSON-like reconstruit automatiquement à partir d'un `JOIN` — les
+     colonnes de gauche qui se répètent deviennent l'entête parent, celles
+     qui varient forment un tableau d'enfants ; aucun alias à écrire). Clic
+     droit pour choisir directement.
+   - **⇥** route le résultat vers un **bloc lié** (créé à droite au premier
+     Run, connecté par une arête). Utile quand le résultat prend beaucoup
+     de place ou qu'on veut le comparer à côté.
    - **⧉** duplique le bloc à côté.
-   - **✕** supprime le bloc (et ses connexions).
+   - **✕** supprime le bloc (et son bloc résultat lié, le cas échéant).
+   - **Clic droit sur le bloc** ouvre un menu contextuel (Run, Duplicate,
+     Rename, Copy SQL, changement de vue, toggle bloc-lié, Delete).
+   - **Clic droit sur une cellule ou une ligne** de résultat : copies
+     (valeur, colonne, ligne en JSON/INSERT/TSV) et snippets SQL (clause
+     `WHERE`, `SELECT` filtré, template `UPDATE`).
+   - **Redimensionnement** : sélectionne un bloc, les poignées apparaissent
+     sur les bords/coins ; taille persistée dans le fichier `.graft`.
 4. **Sidebar — explorateur de schéma** : les tables de la base connectée
    apparaissent en direct ; clique **▸** pour dérouler les colonnes ; tape
    dans **Search…** pour filtrer (tables + colonnes) — les tables dont une

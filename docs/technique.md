@@ -219,13 +219,14 @@ clic, supprimable (✕).
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,                            // 1 = pré-blocs liés (rétro-compatible en lecture)
   "name": "analytics",
   "dbType": "sqlite",                      // sqlite | postgres | mysql
   "dbPath": "/chemin/vers/base.sqlite",   // ou null
   "nodes": [
     {
       "id": "block-...",
+      "type": "sqlBlock",                  // sqlBlock | resultBlock
       "position": { "x": 80, "y": 80 },
       "data": {
         "title": "Query 1",
@@ -233,13 +234,69 @@ clic, supprimable (✕).
         "sql": "SELECT 1;",
         "status": "idle",                  // toujours réinitialisé à la sauvegarde
         "result": null,
-        "error": null
+        "error": null,
+        "resultView": "table",             // table | records | nested (défaut table)
+        "emitToBlock": false,              // si true : résultat routé vers un bloc lié
+        "linkedResultId": null,            // id du bloc résultat lié (si spawn)
+        "width": 360,                      // dimensions persistées (NodeResizer)
+        "height": 240
+      }
+    },
+    {
+      "id": "block-result-...",
+      "type": "resultBlock",               // compagnon en lecture seule
+      "position": { "x": 500, "y": 80 },
+      "data": {
+        "sourceId": "block-...",
+        "sourceTitle": "Query 1",
+        "status": "idle",
+        "result": null,
+        "error": null,
+        "resultView": "nested",
+        "width": 420,
+        "height": 320
       }
     }
   ],
   "edges": [ { "id": "...", "source": "block-a", "target": "block-b" } ]
 }
 ```
+
+### Vues de résultat
+
+Trois modes disponibles pour un bloc SQL :
+
+- **`table`** — feuille de calcul classique, avec numéros de ligne.
+- **`records`** — une carte par ligne, champs `clé: valeur` empilés
+  verticalement. Élimine le scroll horizontal quand une ligne est large.
+- **`nested`** — reconstruit un arbre JSON-like à partir des lignes plates
+  d'un `JOIN` par **détection automatique**, sans aucune convention
+  d'alias. L'heuristique parcourt les colonnes de gauche à droite : une
+  colonne est retenue comme « parent » tant qu'elle reste constante à
+  l'intérieur de chaque groupe défini par les parents déjà choisis. Dès
+  qu'une colonne varie au sein d'un groupe, elle (et toutes celles à sa
+  droite) sont considérées comme des colonnes d'enfants ; les lignes qui
+  ne diffèrent que sur ces colonnes fusionnent dans le même parent, et
+  leurs valeurs pilent dans un tableau. Le libellé du tableau est deviné
+  à partir d'un préfixe commun (`constat_id`, `constat_title` → `constat` ;
+  `c.id`, `c.title` → `c`) ; à défaut, `items`.
+
+  Exemple typique :
+  ```sql
+  SELECT a.id, a.name, c.id, c.title
+  FROM audits a LEFT JOIN constats c ON c.audit_id = a.id
+  ```
+  s'affiche comme une liste d'audits, chacun contenant son tableau
+  d'enfants. S'il n'y a rien à regrouper (chaque ligne est unique), la
+  vue nested retombe automatiquement sur `records`.
+
+### Bloc résultat lié (`resultBlock`)
+
+Quand `emitToBlock: true` sur un bloc SQL, l'exécution ne remplit plus le
+pied du bloc source mais spawne (première fois) ou met à jour un
+`resultBlock` positionné à droite et relié par une arête. Le
+`resultBlock` est en lecture seule, expose le même sélecteur de vue, et
+sa suppression déclenche automatiquement l'unlink côté source.
 
 ## Prérequis & commandes
 
