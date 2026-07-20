@@ -19,7 +19,19 @@ const BADGE_LETTER: Record<BlockType, string> = {
  * classic "quick fill" ergonomics of a SQL IDE.
  */
 export function Sidebar() {
-  const nodes = useGraftStore((s) => s.nodes);
+  // Subscribe to the raw nodes array (stable reference), then derive the
+  // filtered list in a memo. Filtering INSIDE the selector would return a
+  // fresh array each call, which Object.is compares as "changed" and pushes
+  // Zustand into an infinite re-render loop (blank screen).
+  const allNodes = useGraftStore((s) => s.nodes);
+  const nodes = useMemo(
+    () =>
+      allNodes.filter(
+        (n): n is import("../store/useGraftStore").SqlNode =>
+          n.type === "sqlBlock",
+      ),
+    [allNodes],
+  );
   const schema = useGraftStore((s) => s.schema);
   const dbPath = useGraftStore((s) => s.dbPath);
   const refreshSchema = useGraftStore((s) => s.refreshSchema);
