@@ -34,6 +34,22 @@ L'ambition « complète » (cf. `docs/conceptuel.md` § Ambition) implique aussi
 **gestionnaire de connexions** (créer/éditer/sauver des connexions nommées,
 secrets) plutôt que la sélection de fichier ad hoc actuelle.
 
+### Plateformes cibles
+
+Graft vise **macOS** et **Windows** comme plateformes de distribution. Ce sont
+les deux seuls OS pour lesquels le rendu, les menus, les dialogues et le bundle
+doivent être polis. **Linux n'est pas une cible** : Tauri sait le compiler et
+ça peut fonctionner comme sous-produit, mais aucune décision d'architecture ne
+doit dégrader l'expérience macOS/Windows pour améliorer Linux.
+
+**WSL2 = environnement de dev, pas plateforme cible.** En WSL2, la fenêtre
+Tauri est un binaire Linux affiché sur Windows via WSLg → décors GTK peu
+esthétiques (barre grise), boîtes de dialogue GTK, pas de menu bar native. Ce
+rendu **n'est pas représentatif** du build Windows natif : pour voir la vraie
+UI Windows, il faut compiler et lancer depuis Windows directement (PowerShell,
+Rust+Node côté Windows), pas depuis WSL. Le build macOS suit la même logique
+sur un Mac.
+
 ### Coquille applicative (app shell)
 
 Graft cible une **application desktop classique**, pas un canvas plein écran :
@@ -45,6 +61,9 @@ Graft cible une **application desktop classique**, pas un canvas plein écran :
   **Windows** (menu de fenêtre).
 - **Canvas** comme surface centrale parmi d'autres (console SQL, grille de
   données, diagrammes…), pas comme l'application entière.
+- **Décors de fenêtre** : natifs par défaut (Fluent sur Windows, traffic-light
+  sur macOS). Une **barre de titre custom cross-platform** intégrant menus et
+  onglets (style VS Code / DataGrip) reste ouverte pour v0.2+.
 
 > Le squelette v0.1 minimal a été **revu** : la coquille (toolbar + sidebar +
 > canvas + status bar) et l'écran d'accueil sont implémentés d'après le wireframe
@@ -102,12 +121,14 @@ Graft/
 │   │   └── HomeScreen.tsx    # écran d'accueil (connexions, quick connect, récents)
 │   ├── components/
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
-│   │   ├── Sidebar.tsx       # explorateur de schéma (placeholder) + liste des blocs
+│   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
+│   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter
 │   │   └── StatusBar.tsx     # barre de statut bas
 │   └── canvas/
 │       ├── GraftCanvas.tsx   # <ReactFlow> + dot-grid + Controls/MiniMap + empty state
-│       ├── SqlBlockNode.tsx  # nœud custom : header, éditeur, Run, résultats
-│       └── ResultTable.tsx   # rendu d'un result set en table
+│       ├── SqlBlockNode.tsx  # nœud custom : header (titre éditable, dupliquer, supprimer, Run), éditeur, résultats
+│       ├── editorRegistry.ts # registre id→EditorView pour insérer depuis la sidebar
+│       └── ResultTable.tsx   # rendu d'un result set en table (numéros de ligne, copie au dbl-clic)
 └── src-tauri/                # backend Rust (Tauri)
     ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
@@ -160,15 +181,24 @@ clic, supprimable (✕).
 
 ### Éditeur SQL & autocomplétion
 - **`src/components/SqlEditor.tsx`** : CodeMirror 6 (dialecte SQLite), coloration
-  syntaxique, **autocomplétion** (mots-clés + tables/colonnes via le `schema`),
-  et raccourci **`Mod-Enter` (Ctrl/Cmd+Entrée)** pour exécuter le bloc focalisé
-  (keymap en `Prec.highest`).
+  syntaxique, **numéros de ligne**, **active line**, **bracket matching** +
+  auto-close, indentation à la volée, **autocomplétion** ouverte à la frappe
+  (`activateOnTyping: true`, sources combinées `schemaCompletionSource` +
+  `keywordCompletionSource`) et raccourci **`Mod-Enter` (Ctrl/Cmd+Entrée)** pour
+  exécuter le bloc focalisé (keymap en `Prec.highest`).
+- **Focus & registre** : chaque `SqlEditor` s'enregistre dans un module
+  `src/canvas/editorRegistry.ts` (map `id → EditorView`) et remonte son focus
+  au store (`focusedBlockId`). La sidebar utilise ce registre pour insérer un
+  nom de table/colonne au curseur du bloc actif (double-clic).
 - **Schéma** : `store.schema` (`Record<table, colonnes[]>`) alimenté par la
   commande `introspect_schema`. Rafraîchi à la **création/ouverture** d'un projet
   et après un statement **DDL** réussi (`CREATE`/`ALTER`/`DROP`). Passé tel quel à
-  `@codemirror/lang-sql` comme `schema`.
-- Le nœud (`SqlBlockNode`) garde aussi le bouton **▶** ; les deux appellent
-  `runBlock(id)`.
+  `@codemirror/lang-sql` comme `schema` **et** rendu dans la sidebar
+  (`Sidebar.tsx`) : arbre tables → colonnes, recherche (filtre sur noms de
+  tables + colonnes), bouton **↻** de rafraîchissement manuel.
+- Le nœud (`SqlBlockNode`) expose aussi **titre éditable** (double-clic),
+  **dupliquer** (⧉), **supprimer** (✕) et **▶ Run** — le run est aussi
+  déclenché par `Mod-Enter`.
 
 ## Commandes Tauri exposées (`lib.rs`)
 
@@ -215,6 +245,14 @@ clic, supprimable (✕).
 
 **Prérequis :** Node + pnpm, Rust stable (+ prérequis Tauri de l'OS).
 
+**Cibles de build :**
+- **macOS** : builder depuis un Mac (`pnpm tauri build` → `.app` + `.dmg`).
+- **Windows** : builder depuis Windows natif (`pnpm tauri build` → `.exe` +
+  installeur MSI). **Pas depuis WSL** — WSL produit un binaire Linux qui
+  s'affichera à travers WSLg avec des décors GTK, pas la vraie chrome
+  Windows.
+- **Linux** : hors périmètre de distribution ; utilisable pour du dev.
+
 ```bash
 pnpm install        # deps frontend
 pnpm tauri dev      # lance l'app desktop (Vite + compile Rust + ouvre la fenêtre)
@@ -257,8 +295,13 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 
 ## Écarts assumés en v0.1
 
-- Éditeur = **CodeMirror 6** (coloration + autocomplétion schéma + Ctrl/Cmd+Entrée)
-  — une partie de la v0.2 est donc déjà là.
+- Éditeur = **CodeMirror 6** (coloration + numéros de ligne + active line +
+  bracket matching + autocomplétion schéma à la frappe + Ctrl/Cmd+Entrée)
+  — l'essentiel de la v0.2 est donc déjà là.
+- **Ergonomie éditeur classique** : sidebar avec schéma live (recherche, arbre
+  tables/colonnes, double-clic pour insérer au curseur), actions par bloc
+  (renommer, dupliquer, supprimer), table de résultats numérotée avec copie
+  cellule au double-clic.
 - Autocomplétion alimentée par l'introspection **SQLite** uniquement (Postgres/MySQL
   en v0.3).
 - Seul **SQLite** est branché (Postgres/MySQL en v0.3) — mais `sqlx` est déjà

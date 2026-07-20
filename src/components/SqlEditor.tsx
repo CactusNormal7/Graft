@@ -1,35 +1,83 @@
-import { useMemo, useRef } from "react";
-import CodeMirror from "@uiw/react-codemirror";
-import { sql, SQLite, type SQLNamespace } from "@codemirror/lang-sql";
+import { useEffect, useMemo, useRef } from "react";
+import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import {
+  sql,
+  SQLite,
+  keywordCompletionSource,
+  schemaCompletionSource,
+  type SQLNamespace,
+} from "@codemirror/lang-sql";
 import { EditorView, keymap } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
+import {
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+} from "@codemirror/autocomplete";
+import {
+  bracketMatching,
+  indentOnInput,
+  foldKeymap,
+} from "@codemirror/language";
+import { registerEditor, unregisterEditor } from "../canvas/editorRegistry";
 
 interface SqlEditorProps {
+  blockId: string;
   value: string;
   /** table/view → columns, for autocompletion. */
   schema: Record<string, string[]>;
   onChange: (value: string) => void;
   onRun: () => void;
+  onFocus?: () => void;
 }
 
 /**
- * SQL editor for a block: CodeMirror 6 with SQLite dialect syntax highlighting,
- * schema-aware autocompletion (tables/columns + keywords), and Cmd/Ctrl+Enter to
- * run the block.
+ * SQL editor for a block: CodeMirror 6 with SQLite dialect highlighting,
+ * schema-aware autocompletion (tables/columns + keywords), line numbers,
+ * bracket matching, and Cmd/Ctrl+Enter to run the block.
  */
-export function SqlEditor({ value, schema, onChange, onRun }: SqlEditorProps) {
-  // Keep onRun current without rebuilding the editor extensions on every render.
+export function SqlEditor({
+  blockId,
+  value,
+  schema,
+  onChange,
+  onRun,
+  onFocus,
+}: SqlEditorProps) {
+  // Keep callbacks current without rebuilding the editor extensions.
   const runRef = useRef(onRun);
   runRef.current = onRun;
+  const focusRef = useRef(onFocus);
+  focusRef.current = onFocus;
 
-  const extensions = useMemo(
-    () => [
+  const cmRef = useRef<ReactCodeMirrorRef>(null);
+
+  const extensions = useMemo(() => {
+    const dialect = SQLite;
+    return [
       sql({
-        dialect: SQLite,
+        dialect,
         schema: schema as SQLNamespace,
         upperCaseKeywords: true,
       }),
-      // High precedence so Mod-Enter wins over default editor bindings.
+      // Explicit autocomplete config: open on typing (activateOnTyping),
+      // and combine keyword + schema sources so tables/columns fire even
+      // inside partially-typed identifiers.
+      autocompletion({
+        activateOnTyping: true,
+        override: [
+          schemaCompletionSource({
+            dialect,
+            schema: schema as SQLNamespace,
+            upperCaseKeywords: true,
+          }),
+          keywordCompletionSource(dialect, true),
+        ],
+      }),
+      closeBrackets(),
+      bracketMatching(),
+      indentOnInput(),
+      // High precedence so Mod-Enter wins over the default editor bindings.
       Prec.highest(
         keymap.of([
           {
@@ -39,32 +87,93 @@ export function SqlEditor({ value, schema, onChange, onRun }: SqlEditorProps) {
               return true;
             },
           },
+          ...closeBracketsKeymap,
+          ...foldKeymap,
         ]),
       ),
+      EditorView.domEventHandlers({
+        focus: () => {
+          focusRef.current?.();
+          return false;
+        },
+      }),
       EditorView.theme(
         {
-          "&": { backgroundColor: "var(--editor-bg)", fontSize: "var(--mono-size)" },
-          ".cm-content": { fontFamily: "var(--font-mono)", minHeight: "84px" },
-          ".cm-scroller": { fontFamily: "var(--font-mono)", maxHeight: "240px" },
-          ".cm-gutters": { display: "none" },
+          "&": {
+            backgroundColor: "var(--editor-bg)",
+            fontSize: "var(--mono-size)",
+          },
+          ".cm-content": {
+            fontFamily: "var(--font-mono)",
+            minHeight: "84px",
+            caretColor: "var(--accent)",
+          },
+          ".cm-scroller": {
+            fontFamily: "var(--font-mono)",
+            maxHeight: "260px",
+          },
+          ".cm-gutters": {
+            backgroundColor: "var(--editor-bg)",
+            color: "var(--muted-2)",
+            border: "none",
+            borderRight: "1px solid var(--border)",
+          },
+          ".cm-activeLineGutter": {
+            backgroundColor: "var(--panel-2)",
+            color: "var(--text-2)",
+          },
+          ".cm-activeLine": { backgroundColor: "rgba(255,255,255,0.02)" },
+          ".cm-matchingBracket, .cm-nonmatchingBracket": {
+            backgroundColor: "var(--accent-dim)",
+            outline: "1px solid var(--accent)",
+          },
+          ".cm-selectionBackground, ::selection": {
+            backgroundColor: "var(--accent-dim)",
+          },
           "&.cm-focused": { outline: "none" },
+          ".cm-tooltip": {
+            backgroundColor: "var(--panel)",
+            border: "1px solid var(--border-2)",
+            borderRadius: "6px",
+            boxShadow: "var(--shadow-float)",
+            fontFamily: "var(--font-mono)",
+          },
+          ".cm-tooltip-autocomplete ul li[aria-selected]": {
+            backgroundColor: "var(--accent-dim)",
+            color: "var(--accent)",
+          },
         },
         { dark: true },
       ),
-    ],
-    [schema],
-  );
+    ];
+  }, [schema]);
+
+  // Register the editor view in the module-level registry so external UI
+  // (sidebar clicks) can dispatch edits into the currently focused block.
+  useEffect(() => {
+    const view = cmRef.current?.view;
+    if (!view) return;
+    registerEditor(blockId, view);
+    return () => unregisterEditor(blockId, view);
+  }, [blockId]);
 
   return (
     <CodeMirror
+      ref={cmRef}
       className="nodrag nowheel sql-block__cm"
       value={value}
       theme="dark"
       basicSetup={{
-        lineNumbers: false,
+        lineNumbers: true,
         foldGutter: false,
-        highlightActiveLine: false,
-        highlightActiveLineGutter: false,
+        highlightActiveLine: true,
+        highlightActiveLineGutter: true,
+        highlightSelectionMatches: true,
+        indentOnInput: false,
+        // We provide our own autocompletion config above.
+        autocompletion: false,
+        bracketMatching: false,
+        closeBrackets: false,
       }}
       extensions={extensions}
       onChange={onChange}

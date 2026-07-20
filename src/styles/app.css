@@ -331,7 +331,26 @@ button {
   align-items: center;
   gap: 5px;
   cursor: pointer;
-  padding: 1px 0;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.schema-row:hover { background: var(--panel-2); }
+
+.schema-row__caret {
+  color: var(--muted-2);
+  width: 10px;
+  flex-shrink: 0;
+  font-size: 10px;
+}
+
+.schema-row__name {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 
 .schema-tag {
@@ -344,15 +363,67 @@ button {
 }
 
 .schema-cols {
-  padding-left: 14px;
+  padding-left: 18px;
   display: flex;
   flex-direction: column;
   gap: 1px;
+  margin-bottom: 2px;
 }
 
 .schema-col {
   font-size: var(--text-xs);
   color: var(--muted);
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+
+.schema-col:hover {
+  background: var(--panel-2);
+  color: var(--text-2);
+}
+
+.sidebar__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.sidebar__refresh {
+  padding: 1px 6px;
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.sidebar__blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  min-height: 0;
+  max-height: 30%;
+}
+
+.sidebar__block {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.sidebar__block.is-active {
+  background: var(--accent-dim);
+}
+
+.sidebar__block-name {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------------
@@ -432,9 +503,34 @@ button {
 .sql-block__status--success { color: var(--success); }
 .sql-block__status--error   { color: var(--error); }
 
+.sql-block__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .sql-block__run {
   padding: 2px 7px;
   font-size: var(--text-xs);
+}
+
+.sql-block__icon {
+  padding: 1px 6px;
+  font-size: var(--text-xs);
+  line-height: 1;
+}
+
+.sql-block__title-input {
+  flex: 1;
+  background: var(--editor-bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  padding: 1px 5px;
+  outline: none;
+  min-width: 0;
 }
 
 /* CodeMirror SQL editor inside a block */
@@ -515,7 +611,22 @@ button {
 }
 
 .result-table td.is-number { color: var(--data-number-text); }
-.result-table td.is-null em { color: var(--data-null-text); }
+.result-table td.is-null em { color: var(--data-null-text); font-style: italic; }
+
+.result-table th.result-table__rownum,
+.result-table td.result-table__rownum {
+  color: var(--muted-2);
+  background: var(--data-header-bg);
+  text-align: right;
+  padding: 4px 8px;
+  border-right: 1px solid var(--panel-2);
+  user-select: none;
+  font-size: var(--text-xs);
+}
+
+.result-table tbody tr:hover td:not(.result-table__rownum) {
+  background: var(--panel-2);
+}
 
 /* ---------------------------------------------------------------------------
    Empty state

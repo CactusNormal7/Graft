@@ -8,6 +8,8 @@ Target audience: **developers and DBAs**, not data analysts or BI users. This is
 
 Ambition: a **complete, heavy tool** ("heavy" = comprehensive, not slow) at the scope of **DBeaver / DataGrip** — a full DB IDE, not a minimal editor. It ships as a classic desktop app shell (native menu bar File/Edit/View/Window on macOS + Windows, plus a sidebar for connections/schema), with the **canvas as the central surface** around which the conventional IDE surfaces are organized — the canvas stays the spine, it must not become a gimmick bolted onto a DBeaver clone. **Postgres, MySQL and SQLite are all indispensable** engines (SQLite-only in v0.1 is just the starting point). See `docs/conceptuel.md` and `docs/technique.md` for the detailed direction. (The current v0.1 skeleton is intentionally minimal and will be reworked to host this shell.)
 
+**Target platforms**: **macOS** and **Windows** are the shipping targets — the app must feel native on both (native window chrome / menu bar / dialogs). **Linux is not a shipping target**; it may work as a byproduct of Tauri, but no design decision should sacrifice the macOS/Windows experience for Linux polish. WSL2 is a *dev environment* only (via WSLg it renders through GTK, which gives a rough decoration bar that is not representative of the real Windows build).
+
 Current phase: v0.1 (proof of concept) — initial codebase scaffolded and building (Tauri + React + React Flow + sqlx/SQLite).
 
 ## Tech Stack (decided — do not suggest alternatives without flagging the tradeoff)

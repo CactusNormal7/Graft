@@ -1,4 +1,6 @@
+import { useMemo, useState } from "react";
 import { useGraftStore } from "../store/useGraftStore";
+import { insertIntoEditor } from "../canvas/editorRegistry";
 import type { BlockType } from "../types";
 
 const BADGE_LETTER: Record<BlockType, string> = {
@@ -11,51 +13,140 @@ const BADGE_LETTER: Record<BlockType, string> = {
 };
 
 /**
- * Canvas sidebar: schema explorer + block list (wireframe screen 03).
- * NOTE: the schema tree is a static placeholder — live schema introspection
- * is not implemented yet (planned for v0.3 alongside Postgres/MySQL support).
+ * Canvas sidebar: live schema explorer (tables introspected from the DB, with
+ * expandable columns and a search filter) + block list. Clicking a table or
+ * column inserts its name into the currently-focused block editor — the
+ * classic "quick fill" ergonomics of a SQL IDE.
  */
 export function Sidebar() {
   const nodes = useGraftStore((s) => s.nodes);
+  const schema = useGraftStore((s) => s.schema);
+  const dbPath = useGraftStore((s) => s.dbPath);
+  const refreshSchema = useGraftStore((s) => s.refreshSchema);
+  const focusedBlockId = useGraftStore((s) => s.focusedBlockId);
+
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+
+  const tables = useMemo(() => Object.keys(schema).sort(), [schema]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return tables;
+    return tables.filter(
+      (t) =>
+        t.toLowerCase().includes(q) ||
+        schema[t].some((c) => c.toLowerCase().includes(q)),
+    );
+  }, [tables, schema, query]);
+
+  // If there's an active search, auto-expand any table whose columns match
+  // so the hit is visible without clicking.
+  const isRowExpanded = (t: string) => {
+    if (expanded[t]) return true;
+    const q = query.trim().toLowerCase();
+    if (!q) return false;
+    return schema[t].some((c) => c.toLowerCase().includes(q));
+  };
+
+  const insert = (text: string) => {
+    if (!focusedBlockId) return;
+    insertIntoEditor(focusedBlockId, text);
+  };
 
   return (
     <aside className="sidebar">
-      <div className="label">Schema</div>
-      <input className="schema-search" placeholder="Search…" disabled />
+      <div className="sidebar__row">
+        <span className="label">Schema</span>
+        <button
+          className="btn sidebar__refresh"
+          title="Refresh schema"
+          onClick={() => void refreshSchema()}
+          disabled={!dbPath}
+        >
+          ↻
+        </button>
+      </div>
+      <input
+        className="schema-search"
+        placeholder="Search tables & columns…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+
       <div className="sidebar__scroll">
-        {/* Placeholder schema — replace with real introspection in v0.3. */}
-        <div className="schema-row">
-          <span className="text-muted">▶</span>
-          <span className="text-sm">users</span>
-          <span className="schema-tag">table</span>
-        </div>
-        <div className="schema-row">
-          <span className="text-muted">▶</span>
-          <span className="text-sm">orders</span>
-          <span className="schema-tag">table</span>
-        </div>
-        <div className="schema-row">
-          <span className="text-muted">▶</span>
-          <span className="text-sm">products</span>
-          <span className="schema-tag">table</span>
-        </div>
-        <div className="text-muted" style={{ marginTop: "8px", fontStyle: "italic" }}>
-          (schema introspection — v0.3)
-        </div>
+        {!dbPath && (
+          <span className="text-muted">No database connected</span>
+        )}
+        {dbPath && tables.length === 0 && (
+          <span className="text-muted">Empty schema — create a table.</span>
+        )}
+        {filtered.map((table) => {
+          const open = isRowExpanded(table);
+          const cols = schema[table];
+          return (
+            <div key={table}>
+              <div
+                className="schema-row"
+                onClick={() =>
+                  setExpanded((prev) => ({ ...prev, [table]: !prev[table] }))
+                }
+                title={
+                  focusedBlockId
+                    ? "Click ▸ to expand · double-click name to insert"
+                    : "Focus a block to insert"
+                }
+              >
+                <span className="schema-row__caret">{open ? "▾" : "▸"}</span>
+                <span
+                  className="schema-row__name"
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    insert(table);
+                  }}
+                >
+                  {table}
+                </span>
+                <span className="schema-tag">
+                  {cols.length}
+                </span>
+              </div>
+              {open && (
+                <div className="schema-cols">
+                  {cols.map((col) => (
+                    <div
+                      key={col}
+                      className="schema-col"
+                      title={`Insert "${table}.${col}" into the focused block`}
+                      onDoubleClick={() => insert(`${table}.${col}`)}
+                    >
+                      · {col}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {dbPath && filtered.length === 0 && tables.length > 0 && (
+          <span className="text-muted">No match for “{query}”.</span>
+        )}
       </div>
 
       <div className="sep sep--h" />
       <div className="label">Blocks ({nodes.length})</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+      <div className="sidebar__blocks">
         {nodes.length === 0 && <span className="text-muted">No blocks yet</span>}
         {nodes.map((n) => (
-          <div key={n.id} style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+          <div
+            key={n.id}
+            className={`sidebar__block ${focusedBlockId === n.id ? "is-active" : ""}`}
+            title={n.data.title}
+          >
             <span className={`badge badge--${n.data.blockType}`}>
               {BADGE_LETTER[n.data.blockType]}
             </span>
-            <span className="text-muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {n.data.title}
-            </span>
+            <span className="sidebar__block-name">{n.data.title}</span>
           </div>
         ))}
       </div>

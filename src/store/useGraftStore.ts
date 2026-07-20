@@ -75,6 +75,10 @@ interface GraftState {
   /** Introspected schema: table/view name → column names (for autocompletion). */
   schema: Record<string, string[]>;
 
+  /** Id of the block whose editor last had focus — used by the sidebar
+   *  to know where to insert clicked table/column names. */
+  focusedBlockId: string | null;
+
   recentProjects: RecentProject[];
 
   onNodesChange: (changes: NodeChange<SqlNode>[]) => void;
@@ -95,6 +99,10 @@ interface GraftState {
   refreshSchema: () => Promise<void>;
   addBlock: (blockType: BlockType) => void;
   updateSql: (id: string, sql: string) => void;
+  updateTitle: (id: string, title: string) => void;
+  duplicateBlock: (id: string) => void;
+  deleteBlock: (id: string) => void;
+  setFocusedBlock: (id: string | null) => void;
   runBlock: (id: string) => Promise<void>;
   runAll: () => Promise<void>;
 
@@ -138,6 +146,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   dbType: "sqlite",
   dbPath: null,
   schema: {},
+  focusedBlockId: null,
   recentProjects: loadRecents(),
 
   onNodesChange: (changes) =>
@@ -271,6 +280,40 @@ export const useGraftStore = create<GraftState>((set, get) => ({
 
   updateSql: (id, sql) =>
     set({ nodes: patchNode(get().nodes, id, { sql }) }),
+
+  updateTitle: (id, title) =>
+    set({ nodes: patchNode(get().nodes, id, { title }) }),
+
+  duplicateBlock: (id) => {
+    const src = get().nodes.find((n) => n.id === id);
+    if (!src) return;
+    const copy: SqlNode = {
+      id: nextId(),
+      type: "sqlBlock",
+      position: { x: src.position.x + 40, y: src.position.y + 40 },
+      data: {
+        ...src.data,
+        title: `${src.data.title} (copy)`,
+        status: "idle",
+        result: null,
+        error: null,
+      },
+    };
+    set({ nodes: [...get().nodes, copy] });
+  },
+
+  deleteBlock: (id) => {
+    const nodes = get().nodes.filter((n) => n.id !== id);
+    // Drop any dangling edges that referenced the deleted node.
+    const edges = get().edges.filter((e) => e.source !== id && e.target !== id);
+    set({
+      nodes,
+      edges,
+      focusedBlockId: get().focusedBlockId === id ? null : get().focusedBlockId,
+    });
+  },
+
+  setFocusedBlock: (id) => set({ focusedBlockId: id }),
 
   runBlock: async (id) => {
     const { dbPath, nodes } = get();

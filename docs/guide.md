@@ -61,21 +61,36 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 ### Le canvas
 1. **+ Block** (toolbar) → choisis un type (`query`, `migration`, `procedure`,
    `trigger`, `view`, `script`). Le bloc apparaît sur le canvas.
-2. Écris ton SQL dans le bloc (coloration syntaxique + **autocomplétion** des
-   tables/colonnes de ta base et des mots-clés SQL), puis exécute :
+2. Écris ton SQL dans le bloc — coloration syntaxique, **numéros de ligne**,
+   **surlignage de ligne active**, **appariement de parenthèses**, indentation
+   automatique, **autocomplétion** ouverte à la frappe (tables/colonnes de ta
+   base + mots-clés SQL en majuscules), puis exécute :
    - clique **▶**, ou
    - **Ctrl/Cmd + Entrée** quand le curseur est dans le bloc.
    Résultats :
    - Une requête de lecture affiche une **table de résultats** (+ nb de lignes
-     et temps en ms).
+     et temps en ms), avec **numéros de ligne** et **double-clic sur une
+     cellule pour la copier**.
    - Une écriture/DDL affiche le **nombre de lignes affectées**.
    - Une erreur s'affiche en rouge dans le bloc.
-3. **▶ Run all** (toolbar) exécute tous les blocs dans l'ordre.
-4. **Déplace** les blocs librement, **relie-les** en tirant depuis le point de
+3. **Actions par bloc** dans le header :
+   - **Double-clic sur le titre** → renommer (Entrée pour valider, Échap pour
+     annuler).
+   - **⧉** duplique le bloc à côté.
+   - **✕** supprime le bloc (et ses connexions).
+4. **Sidebar — explorateur de schéma** : les tables de la base connectée
+   apparaissent en direct ; clique **▸** pour dérouler les colonnes ; tape
+   dans **Search…** pour filtrer (tables + colonnes) — les tables dont une
+   colonne matche se déploient automatiquement. **↻** relance l'introspection.
+   **Double-clic sur un nom de table** ou de colonne l'insère au curseur du
+   bloc actif (le dernier éditeur focalisé — surligné dans la liste
+   « Blocks »).
+5. **▶ Run all** (toolbar) exécute tous les blocs dans l'ordre.
+6. **Déplace** les blocs librement, **relie-les** en tirant depuis le point de
    connexion droit vers le point gauche d'un autre bloc.
-5. **Save** → enregistre le canvas dans un fichier `.graft` (JSON).
+7. **Save** → enregistre le canvas dans un fichier `.graft` (JSON).
    Le clic sur **graft** (en haut à gauche) revient à l'accueil.
-6. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
+8. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
    en bas à droite.
 
 ### Navigation sur le canvas
@@ -94,8 +109,9 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 
 ## 6. Limites actuelles (v0.1)
 
-- L'éditeur SQL est un simple champ texte (la coloration + autocomplétion
-  Monaco arrivent en v0.2).
+- Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
+  schéma + gutter + brackets + `Mod-Enter`) — reste à faire côté v0.2+ : LSP
+  (`sql-language-server`), diagnostics en ligne, formatage, palette ⌘K.
 - Seul **SQLite** est supporté (Postgres/MySQL en v0.3).
 - Les liens entre blocs sont visuels uniquement (pas encore d'ordre
   d'exécution).
