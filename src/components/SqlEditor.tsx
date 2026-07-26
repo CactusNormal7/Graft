@@ -102,6 +102,9 @@ export function SqlEditor({
           "&": {
             backgroundColor: "var(--editor-bg)",
             fontSize: "var(--mono-size)",
+            // Fill the (flex) editor wrapper so the editor grows when the block
+            // is resized taller; scroll internally past that.
+            height: "100%",
           },
           ".cm-content": {
             fontFamily: "var(--font-mono)",
@@ -110,7 +113,7 @@ export function SqlEditor({
           },
           ".cm-scroller": {
             fontFamily: "var(--font-mono)",
-            maxHeight: "260px",
+            overflow: "auto",
           },
           ".cm-gutters": {
             backgroundColor: "var(--editor-bg)",
@@ -160,7 +163,7 @@ export function SqlEditor({
   return (
     <CodeMirror
       ref={cmRef}
-      className="nodrag nowheel sql-block__cm"
+      className="nodrag sql-block__cm"
       value={value}
       theme="dark"
       basicSetup={{

@@ -13,6 +13,7 @@
 | Canvas | **React Flow** (`@xyflow/react`) | vrai modèle nœuds/arêtes pour les connexions blocs ↔ schéma |
 | Éditeur SQL | **CodeMirror 6** (`@uiw/react-codemirror` + `@codemirror/lang-sql`) | léger pour N éditeurs sur le canvas ; coloration + autocomplétion schéma natives (préféré à Monaco) |
 | État | **Zustand** | évite les re-renders en cascade du Context API |
+| Graphiques | **Recharts** (`recharts`) | vue `chart` des résultats (bar/line/area/pie), déclaratif React ; compromis : plus lourd que uPlot/visx, à réévaluer si perf |
 | Drivers DB | **sqlx** — **Postgres + MySQL + SQLite** | API async unifiée multi-moteur |
 
 > Ne pas proposer d'alternative à la stack sans signaler explicitement le compromis.
@@ -107,7 +108,7 @@ Graft/
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
 │   ├── store/
-│   │   └── useGraftStore.ts  # store Zustand (view, nodes, edges, dbPath, actions)
+│   │   └── useGraftStore.ts  # store Zustand (view, pages, nodes/edges de la page active, dbPath, actions)
 │   ├── styles/
 │   │   ├── app.css           # classes de la coquille + composants (issu du wireframe)
 │   │   └── tokens/           # design tokens (miroir du DS Claude Design)
@@ -123,12 +124,14 @@ Graft/
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
 │   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
 │   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter
+│   │   ├── PageTabs.tsx      # barre d'onglets de pages (Excel-like) en bas du canvas
 │   │   └── StatusBar.tsx     # barre de statut bas
 │   └── canvas/
-│       ├── GraftCanvas.tsx   # <ReactFlow> + dot-grid + Controls/MiniMap + empty state
+│       ├── GraftCanvas.tsx   # <ReactFlow> + dot-grid + Controls/MiniMap + empty state + drag→groupe
 │       ├── SqlBlockNode.tsx  # nœud custom : header (titre éditable, dupliquer, supprimer, Run), éditeur, résultats
+│       ├── GroupNode.tsx     # nœud conteneur coloré (parent React Flow) : titre, couleur, resize
 │       ├── editorRegistry.ts # registre id→EditorView pour insérer depuis la sidebar
-│       └── ResultTable.tsx   # rendu d'un result set en table (numéros de ligne, copie au dbl-clic)
+│       └── ResultTable.tsx   # rendu d'un result set : vues table / json (arbre repliable) / chart + pagination client
 └── src-tauri/                # backend Rust (Tauri)
     ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
@@ -145,16 +148,23 @@ Graft/
 ### Exécution d'une requête
 1. L'utilisateur clique **▶ Run** sur un bloc → `runBlock(id)` dans le store.
 2. Le store passe le bloc en `running` et appelle la commande Tauri
-   `invoke("execute_sql", { dbPath, sql })`.
+   `invoke("execute_sql", { dbPath, sql, maxRows: MAX_FETCH_ROWS })`.
 3. Côté Rust (`db.rs`) : ouverture d'un `SqlitePool` sur `dbPath`
    (`create_if_missing`), exécution d'**un** statement :
    - statement qui renvoie des lignes (`select`/`with`/`pragma`/`explain`) →
-     `fetch_all`, conversion de chaque cellule en `serde_json::Value` (sondage de
-     types i64 → f64 → bool → String → blob) ;
+     `fetch_all`, puis **`take(max_rows)`** avant la conversion de chaque cellule
+     en `serde_json::Value` (sondage de types i64 → f64 → bool → String → blob) ;
    - sinon (`INSERT`/`UPDATE`/DDL…) → `execute`, on renvoie `rows_affected`.
-4. Le résultat (`QueryResult { columns, rows, rows_affected, elapsed_ms }`)
-   revient au store, qui met le bloc en `success` (ou `error`) et déclenche le
-   rendu inline (`ResultTable` ou message d'erreur).
+4. Le résultat (`QueryResult { columns, rows, rows_affected, elapsed_ms,
+   total_rows, truncated }`) revient au store, qui met le bloc en `success` (ou
+   `error`) et déclenche le rendu inline (`ResultTable` ou message d'erreur).
+
+**Plafond de lignes (perf)** — la conversion JSON + la sérialisation IPC de
+Tauri sont le vrai coût d'un gros résultat (50 000 lignes × 19 colonnes ≈ 950 000
+valeurs). `execute_sql` ne convertit donc que les `max_rows` premières lignes
+(défaut **5000**, `MAX_FETCH_ROWS` côté store), tout en renvoyant le **vrai**
+total (`total_rows`) et un drapeau `truncated` affiché dans le pied du bloc
+(« 5000 / 50000 row(s) · tronqué »). L'UI pagine ensuite ces lignes (100/page).
 
 ### Projets (création / ouverture / sauvegarde)
 Un **projet** = un fichier `.graft` + une connexion (type + base). Cycle de vie :
@@ -189,7 +199,9 @@ clic, supprimable (✕).
 - **Focus & registre** : chaque `SqlEditor` s'enregistre dans un module
   `src/canvas/editorRegistry.ts` (map `id → EditorView`) et remonte son focus
   au store (`focusedBlockId`). La sidebar utilise ce registre pour insérer un
-  nom de table/colonne au curseur du bloc actif (double-clic).
+  nom de **colonne** au curseur du bloc actif (double-clic colonne). Le
+  **double-clic sur un nom de table** appelle plutôt `store.addSelectBlock(table)`
+  qui crée et exécute un bloc `SELECT * FROM <table> LIMIT 100;`.
 - **Schéma** : `store.schema` (`Record<table, colonnes[]>`) alimenté par la
   commande `introspect_schema`. Rafraîchi à la **création/ouverture** d'un projet
   et après un statement **DDL** réussi (`CREATE`/`ALTER`/`DROP`). Passé tel quel à
@@ -204,8 +216,8 @@ clic, supprimable (✕).
 
 | Commande | Signature | Rôle |
 |----------|-----------|------|
-| `execute_sql` | `(db_path: String, sql: String) -> Result<QueryResult, String>` | exécute un statement SQLite |
-| `introspect_schema` | `(db_path: String) -> Result<{table: [colonnes]}, String>` | schéma SQLite (tables/vues + colonnes) pour l'autocomplétion |
+| `execute_sql` | `(db_path: String, sql: String, max_rows: Option<usize>) -> Result<QueryResult, String>` | exécute un statement SQLite ; **plafonne** les lignes renvoyées (défaut 5000) |
+| `introspect_schema` | `(db_path: String) -> Result<Vec<TableInfo>, String>` | structure SQLite : tables/vues, colonnes (type, notnull, pk) et **clés étrangères** |
 | `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
 | `path_exists` | `(path: String) -> bool` | teste l'existence d'un fichier (purge des récents) |
@@ -217,16 +229,21 @@ clic, supprimable (✕).
 
 ## Format de fichier `.graft`
 
+Depuis la **version 4**, le fichier est **paginé** : `pages[]` (onglets type
+Excel), chacune avec ses propres `nodes`/`edges`. Les fichiers v1–v3 (canvas plat
+avec `nodes`/`edges` à la racine) restent lisibles et sont migrés en une page
+unique « Page 1 » (`pagesFromFile`). Les nœuds ont la même forme qu'avant.
+
 ```jsonc
 {
-  "version": 2,                            // 1 = pré-blocs liés (rétro-compatible en lecture)
+  "version": 4,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages (rétro-compatible en lecture)
   "name": "analytics",
   "dbType": "sqlite",                      // sqlite | postgres | mysql
   "dbPath": "/chemin/vers/base.sqlite",   // ou null
-  "nodes": [
+  "pages": [{ "id": "page-...", "name": "Page 1", "nodes": [
     {
       "id": "block-...",
-      "type": "sqlBlock",                  // sqlBlock | resultBlock
+      "type": "sqlBlock",                  // sqlBlock | resultBlock | group
       "position": { "x": 80, "y": 80 },
       "data": {
         "title": "Query 1",
@@ -235,7 +252,12 @@ clic, supprimable (✕).
         "status": "idle",                  // toujours réinitialisé à la sauvegarde
         "result": null,
         "error": null,
-        "resultView": "table",             // table | records | nested (défaut table)
+        "resultView": "table",             // table | json | chart (défaut table ; anciens "records"/"nested" → "json")
+        "chartConfig": {                   // config de la vue chart (persistée)
+          "type": "bar",                   // bar | line | area | pie
+          "xCol": "name",
+          "yCols": ["total"]
+        },
         "emitToBlock": false,              // si true : résultat routé vers un bloc lié
         "linkedResultId": null,            // id du bloc résultat lié (si spawn)
         "width": 360,                      // dimensions persistées (NodeResizer)
@@ -252,43 +274,122 @@ clic, supprimable (✕).
         "status": "idle",
         "result": null,
         "error": null,
-        "resultView": "nested",
+        "resultView": "json",
         "width": 420,
         "height": 320
       }
     }
-  ],
-  "edges": [ { "id": "...", "source": "block-a", "target": "block-b" } ]
+  ], "edges": [ { "id": "...", "source": "block-a", "target": "block-b" } ] }]
 }
 ```
 
+**Dimensions par défaut** — tout nœud reçoit une **largeur et une hauteur
+explicites** à la création (bloc 520×300, bloc résultat 640×360, groupe
+480×340), et un repli est appliqué au chargement des anciens fichiers. Sans
+cela React Flow mesure le nœud d'après son contenu : une table à 19 colonnes ou
+un script d'INSERT de plusieurs milliers de lignes produisait un bloc démesuré.
+Le contenu **scrolle à l'intérieur** ; le bloc reste redimensionnable à la
+souris. Les blocs repliés (`collapsed`) sont la seule exception (hauteur
+laissée libre pour coller au header).
+
+**Schéma en cache (v5)** — la structure de la base (`dbSchema: TableInfo[]` :
+colonnes typées, PK, **clés étrangères**) est introspectée **à la création du
+projet**, rafraîchie après chaque DDL réussi (`CREATE`/`ALTER`/`DROP`), et
+**sérialisée dans le `.graft`**. Elle est donc disponible dès l'ouverture sans
+tout re-déduire, et sert de base aux fonctionnalités relationnelles (ORM).
+`store.schema` (`table → colonnes[]`) en est dérivé (`flattenSchema`) pour
+l'autocomplétion CodeMirror et la sidebar.
+
+**Blocs favoris / snippets (v5)** — `snippets: Snippet[]` (persistés dans le
+`.graft`). Un favori est référencé par `{{nom}}` dans n'importe quelle requête ;
+`expandSnippets` (`src/store/snippets.ts`) substitue la référence par le SQL du
+favori **entre parenthèses** (donc utilisable en sous-requête), résout les
+références imbriquées, et laisse intactes les références inconnues ou cycliques
+(garde anti-boucle + profondeur max 10). L'expansion a lieu dans `runBlock`,
+juste avant l'appel à `execute_sql` — le SQL affiché dans l'éditeur reste celui
+écrit par l'utilisateur.
+
+**Pont relationnel (ORM) — `src/canvas/orm.ts`** — la vue JSON/imbriquée est
+traitée comme une **vraie source de données relationnelle**. Tout y est pur
+(pas de React/store/Tauri), donc testable isolément :
+
+- `matchTable(columns, schema)` — retrouve la table cible par recouvrement de
+  noms de colonnes (seuil 60 %), en **excluant les vues** (pas d'INSERT dessus).
+- `findForeignKey(child, parent)` — la FK reliant les deux tables, lue depuis le
+  schéma en cache (`dbSchema`).
+- `generateInserts(result, schema)` — si le résultat a une forme parent→enfants
+  (`detectNestedShape`) **et** que les deux côtés correspondent à des tables
+  réelles, sort des INSERT **relationnels** : un INSERT parent puis ses enfants,
+  avec la FK renseignée (valeur explicite de la PK si elle est sélectionnée,
+  sinon `last_insert_rowid()`). Sinon, repli sur des INSERT plats ligne à ligne,
+  avec un placeholder `«table»` si aucune table ne correspond.
+- `jsonToInserts(json, schema)` — l'inverse à l'import : les champs scalaires
+  d'un objet deviennent une ligne, chaque tableau d'objets devient des lignes
+  dans sa propre table, reliées par la FK. Récursif (profondeur max 10).
+- Les avertissements (table devinée, colonnes ignorées, FK absente) sont émis en
+  en-tête de commentaires SQL — la génération ne se fait jamais en silence.
+
+Exposé par : menu contextuel d'un bloc/résultat (**Generate INSERTs → new
+block**, **Copy INSERTs**, **Export INSERTs (.sql)…**) et bouton **Import…** de
+la toolbar (`.json` imbriqué → INSERT multi-tables, `.sql` → chargé tel quel
+dans un bloc `script`). E/S fichier via les commandes `write_text_file` /
+`read_text_file`. Le formatage SQL (`quoteIdent`/`sqlLiteral`) est centralisé
+dans `src/sqlFormat.ts`.
+
+**Pages en mémoire** — le store garde `pages: Page[]` + `activePageId`, et
+`nodes`/`edges` (top-level) = **copie de travail de la page active** (les
+composants restent inchangés). `commitActivePage` resynchronise cette copie dans
+`pages` avant chaque changement de page ou sauvegarde. Actions : `addPage`,
+`renamePage`, `deletePage` (garde au moins une page), `switchPage`. Barre
+d'onglets : `components/PageTabs.tsx`.
+
 ### Vues de résultat
 
-Trois modes disponibles pour un bloc SQL :
+Trois modes disponibles pour un bloc SQL (`normalizeResultView` mappe les
+anciennes valeurs `records`/`nested` vers `json`) :
 
 - **`table`** — feuille de calcul classique, avec numéros de ligne.
-- **`records`** — une carte par ligne, champs `clé: valeur` empilés
-  verticalement. Élimine le scroll horizontal quand une ligne est large.
-- **`nested`** — reconstruit un arbre JSON-like à partir des lignes plates
-  d'un `JOIN` par **détection automatique**, sans aucune convention
-  d'alias. L'heuristique parcourt les colonnes de gauche à droite : une
-  colonne est retenue comme « parent » tant qu'elle reste constante à
-  l'intérieur de chaque groupe défini par les parents déjà choisis. Dès
-  qu'une colonne varie au sein d'un groupe, elle (et toutes celles à sa
-  droite) sont considérées comme des colonnes d'enfants ; les lignes qui
-  ne diffèrent que sur ces colonnes fusionnent dans le même parent, et
-  leurs valeurs pilent dans un tableau. Le libellé du tableau est deviné
-  à partir d'un préfixe commun (`constat_id`, `constat_title` → `constat` ;
-  `c.id`, `c.title` → `c`) ; à défaut, `items`.
+- **`json`** — un **arbre JSON interactif** (`JsonTreeView` dans
+  `ResultTable.tsx`) : chaque objet/tableau est repliable (comme un éditeur
+  JSON), avec **▼ all / ▶ all** et un défaut d'ouverture par profondeur.
+  Les données affichées sont **soit** le document relationnel ré-imbriqué quand
+  `detectNestedShape` trouve une relation `JOIN` (objet parent + tableau
+  d'enfants via `buildNestedGroups`/`groupToObject`), **soit** le tableau plat
+  des objets ligne. Colorisé par type.
+- **`chart`** — trace le résultat via **Recharts** (`ChartView` dans
+  `ResultTable.tsx`) : type `bar`/`line`/`area`/`pie`, une colonne X, une ou
+  plusieurs séries Y (colonnes numériques détectées par `numericColumns()`).
+  La config (`ChartConfig`) est persistée sur le bloc (`store.setChartConfig`).
+  Les couleurs viennent des tokens `--chart-1..8` (palette catégorielle validée
+  CVD via le skill dataviz, déclinée clair/sombre), lus au rendu pour suivre le
+  thème. La vue chart ignore la pagination (elle trace tout le résultat).
 
-  Exemple typique :
-  ```sql
-  SELECT a.id, a.name, c.id, c.title
-  FROM audits a LEFT JOIN constats c ON c.audit_id = a.id
-  ```
-  s'affiche comme une liste d'audits, chacun contenant son tableau
-  d'enfants. S'il n'y a rien à regrouper (chaque ligne est unique), la
-  vue nested retombe automatiquement sur `records`.
+**Ré-imbrication (vue `json`)** — `detectNestedShape` reconstruit un document
+relationnel à partir des lignes plates d'un `JOIN` par **détection automatique**,
+sans convention d'alias. L'heuristique parcourt les colonnes de gauche à droite :
+une colonne reste « parent » tant qu'elle est constante dans chaque groupe défini
+par les parents déjà choisis ; dès qu'une colonne varie, elle (et celles à sa
+droite) deviennent des colonnes d'enfants. Les lignes ne différant que sur ces
+colonnes fusionnent dans le même parent (`buildNestedGroups`), et `groupToObject`
+produit `{ …parent, <label>: [ …enfants ] }`. Le libellé enfant est deviné d'un
+préfixe commun (`constat_id`/`constat_title` → `constat`) ; à défaut, `items`.
+Ex. `SELECT * FROM users LEFT JOIN reviews …` → un objet `user` contenant son
+tableau de reviews. Sans rien à regrouper (lignes uniques), la vue json affiche
+le tableau plat des objets ligne.
+
+**Pagination** — les vues `table` et `json` paginent **côté client** (les lignes
+sont déjà toutes dans le store). État local à `ResultTable` : `page` + `pageSize`
+(défaut **100**, réinitialisés quand le résultat / la vue / la taille change).
+`table` pagine les **lignes**, `json` les **éléments** de premier niveau (objets
+ré-imbriqués ou lignes plates). La barre (‹ / ›, plage, sélecteur 50 / 100 / 500 /
+Tout) n'apparaît qu'au-delà de 100. `chart` trace tout le résultat (pas de page).
+
+Structure du rendu : `.sql-block__result` (colonne flex, **sans** scroll) →
+`.result-view` → `.result-view__body` (**le** conteneur scrollable) puis
+`.result-pager`. La barre de pagination est donc un frère de la zone scrollable,
+pas un enfant : elle reste toujours la dernière ligne du bloc et ne peut pas
+flotter par-dessus les données (un `position: sticky` s'y comportait mal dans ce
+contexte flex imbriqué).
 
 ### Bloc résultat lié (`resultBlock`)
 
@@ -297,6 +398,28 @@ pied du bloc source mais spawne (première fois) ou met à jour un
 `resultBlock` positionné à droite et relié par une arête. Le
 `resultBlock` est en lecture seule, expose le même sélecteur de vue, et
 sa suppression déclenche automatiquement l'unlink côté source.
+
+### Groupes conteneurs (`group`)
+
+Un nœud `group` (`GroupNode.tsx`, data `GroupBlockData { title, color }`) est un
+**cadre coloré** utilisant le **parentage natif de React Flow** :
+
+- Les groupes sont maintenus **en tête du tableau `nodes`** (`sortGroupsFirst`) —
+  React Flow impose qu'un parent précède ses enfants, et cela les rend *derrière*
+  les blocs.
+- Sur `onNodeDragStop` (`GraftCanvas.tsx`), on détecte le groupe survolé via
+  `getIntersectingNodes` : le bloc reçoit (ou perd) un `parentId`, et sa position
+  est convertie entre **absolu** et **relatif au parent** (via
+  `getInternalNode(id).internals.positionAbsolute`). `store.reparentNode` applique
+  le changement. Déplacer un groupe déplace nativement ses enfants.
+- `store.deleteGroup` supprime le cadre mais **conserve les blocs** (détachés :
+  `parentId` retiré, position reconvertie en absolu).
+- La **suppression clavier est désactivée** (`deleteKeyCode={null}`) pour que
+  toutes les suppressions passent par les boutons ✕ (cascades : résultat lié,
+  détachement des enfants).
+- Persistance : chaque nœud sérialise `parentId` (si présent) ; format `.graft`
+  **version 3**. Les fichiers v1/v2 restent lisibles (pas de groupe, pas de
+  `parentId`).
 
 ## Prérequis & commandes
 

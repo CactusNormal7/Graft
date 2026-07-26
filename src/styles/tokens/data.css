@@ -34,6 +34,30 @@
 
   /* --- Alternating rows (optional) --- */
   --data-stripe-bg:    rgba(255, 255, 255, 0.015);
+
+  /* --- Chart categorical palette (dark surface steps) ---
+     Validated (dataviz skill) against the dark panel surface: fixed hue order,
+     never cycled/reordered. Assign series to slots 1..8 in order. --- */
+  --chart-1: #3987e5;  /* blue */
+  --chart-2: #d95926;  /* orange */
+  --chart-3: #199e70;  /* aqua */
+  --chart-4: #c98500;  /* yellow */
+  --chart-5: #d55181;  /* magenta */
+  --chart-6: #008300;  /* green */
+  --chart-7: #9085e9;  /* violet */
+  --chart-8: #e66767;  /* red */
+}
+
+[data-theme="light"] {
+  /* Same eight hues, stepped for the light surface. */
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --chart-6: #008300;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
 }
 
 [data-theme="light"] {

@@ -36,6 +36,11 @@ export function Sidebar() {
   const dbPath = useGraftStore((s) => s.dbPath);
   const refreshSchema = useGraftStore((s) => s.refreshSchema);
   const focusedBlockId = useGraftStore((s) => s.focusedBlockId);
+  const addSelectBlock = useGraftStore((s) => s.addSelectBlock);
+  const snippets = useGraftStore((s) => s.snippets);
+  const insertSnippetRef = useGraftStore((s) => s.insertSnippetRef);
+  const addBlockFromSnippet = useGraftStore((s) => s.addBlockFromSnippet);
+  const deleteSnippet = useGraftStore((s) => s.deleteSnippet);
 
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -103,18 +108,14 @@ export function Sidebar() {
                 onClick={() =>
                   setExpanded((prev) => ({ ...prev, [table]: !prev[table] }))
                 }
-                title={
-                  focusedBlockId
-                    ? "Click ▸ to expand · double-click name to insert"
-                    : "Focus a block to insert"
-                }
+                title="Click ▸ to expand · double-click name for a SELECT block"
               >
                 <span className="schema-row__caret">{open ? "▾" : "▸"}</span>
                 <span
                   className="schema-row__name"
                   onDoubleClick={(e) => {
                     e.stopPropagation();
-                    insert(table);
+                    addSelectBlock(table);
                   }}
                 >
                   {table}
@@ -143,6 +144,41 @@ export function Sidebar() {
         {dbPath && filtered.length === 0 && tables.length > 0 && (
           <span className="text-muted">No match for “{query}”.</span>
         )}
+      </div>
+
+      <div className="sep sep--h" />
+      <div className="label">Favorites ({snippets.length})</div>
+      <div className="sidebar__blocks">
+        {snippets.length === 0 && (
+          <span className="text-muted">
+            Right-click a block → “Save as favorite…”
+          </span>
+        )}
+        {snippets.map((s) => (
+          <div
+            key={s.id}
+            className="sidebar__block"
+            title={
+              focusedBlockId
+                ? `Double-click to insert {{${s.name}}} · right-click to remove`
+                : `Double-click to open as a block · right-click to remove`
+            }
+            onDoubleClick={() =>
+              focusedBlockId ? insertSnippetRef(s.id) : addBlockFromSnippet(s.id)
+            }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              if (window.confirm(`Remove favorite “${s.name}”?`)) {
+                deleteSnippet(s.id);
+              }
+            }}
+          >
+            <span className={`badge badge--${s.blockType}`}>
+              {BADGE_LETTER[s.blockType]}
+            </span>
+            <span className="sidebar__block-name">{`{{${s.name}}}`}</span>
+          </div>
+        ))}
       </div>
 
       <div className="sep sep--h" />

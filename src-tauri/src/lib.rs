@@ -11,6 +11,8 @@ pub fn run() {
             db::introspect_schema,
             notebook::save_notebook,
             notebook::load_notebook,
+            notebook::write_text_file,
+            notebook::read_text_file,
             notebook::path_exists,
             notebook::default_project_dir,
             notebook::create_project_paths,

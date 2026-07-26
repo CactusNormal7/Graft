@@ -432,13 +432,16 @@ button {
   line-height: 1;
 }
 
+/* Two of these lists now share the sidebar (Favorites + Blocks), so cap each
+   one lower and let them shrink instead of squeezing the schema tree out. */
 .sidebar__blocks {
   display: flex;
   flex-direction: column;
   gap: 2px;
   overflow-y: auto;
   min-height: 0;
-  max-height: 30%;
+  max-height: 22%;
+  flex-shrink: 0;
 }
 
 .sidebar__block {
@@ -527,21 +530,54 @@ button {
   border: 2px solid var(--accent);
 }
 
+/* Collapsed: only the header (name + run). Shrink to content. */
+.sql-block.is-collapsed {
+  min-height: 0;
+  height: auto;
+}
+
+.sql-block__collapse {
+  padding: 0 4px;
+  color: var(--muted);
+}
+
+/* The editor fills the leftover block height (grows on resize) and scrolls
+   internally, instead of being fixed to its content height. */
 .sql-block__editor-wrap {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* NodeResizer styling — subtle unless block is selected */
+.sql-block__cm {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sql-block__cm .cm-editor {
+  height: 100%;
+}
+
+/* NodeResizer: no second frame (the card border is the frame). Handles fade in
+   when the pointer is over the block — or while it's selected — and are big
+   enough to grab comfortably. */
 .sql-block__resize-line {
-  border-color: var(--accent);
-  border-width: 1px;
+  border: none !important;
+  opacity: 0 !important;
 }
 
+/* Invisible but still interactive: React Flow keeps the resize cursor on these
+   controls, which is the only affordance we want (no squares on screen). */
 .sql-block__resize-handle {
-  background: var(--accent);
-  border: 1px solid var(--panel);
-  width: 8px;
-  height: 8px;
+  width: 14px;
+  height: 14px;
+  background: transparent;
+  border: none;
+  opacity: 0;
 }
 
 .sql-block__title {
@@ -645,22 +681,49 @@ button {
 .sql-block__result {
   /* Auto-height blocks: cap so the editor stays visible. When the block has an
    * explicit height, the source overrides max-height inline and lets the area
-   * grow to fill the leftover space. */
+   * grow to fill the leftover space — weighted 2:1 against the editor, since
+   * results need the room more than a two-line query does.
+   * Scrolling happens on .result-view__body inside, not here, so the pager
+   * stays anchored below the scrolling content. */
   max-height: 220px;
-  overflow: auto;
+  overflow: hidden;
   border-top: 1px solid var(--border);
+  flex: 2 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Result column: scrollable body + pinned pager. */
+.result-view {
+  display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
+}
+
+.result-view__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .sql-block__result--flex {
-  /* Used inside a linked result block — the whole card is the result. */
-  max-height: none;
+  /* Used inside a linked result block. Cap the height so a large result set
+     (esp. nested/json) scrolls instead of growing the node arbitrarily. When
+     the node is explicitly resized, the source sets max-height:none inline to
+     fill the available space. */
+  max-height: 440px;
 }
 
 .result-table {
   border-collapse: collapse;
-  width: 100%;
+  /* Size to content (cells are nowrap) but never narrower than the block, so a
+     many-column result scrolls horizontally inside .sql-block__result instead
+     of stretching the node. */
+  width: max-content;
+  min-width: 100%;
   font-size: var(--text-sm);
 }
 
@@ -963,6 +1026,261 @@ button {
 }
 
 /* ---------------------------------------------------------------------------
+   Result — JSON tree view (fold/unfold) + shared JSON token colors
+   --------------------------------------------------------------------------- */
+.json-key { color: var(--accent-text); }
+.json-string { color: var(--data-string-text); }
+.json-number { color: var(--data-number-text); }
+.json-bool { color: var(--data-bool-text); }
+.json-null { color: var(--data-null-text); font-style: italic; }
+.json-punct { color: var(--muted); }
+
+.jsonx {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-family: var(--font-mono);
+  font-size: var(--mono-size-sm);
+}
+
+.jsonx__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--panel-2);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+
+.jsonx__tbtn {
+  padding: 1px 6px;
+  font-size: var(--text-xs);
+}
+
+.jsonx__body {
+  padding: 4px 0 6px;
+  line-height: 1.55;
+}
+
+.jsonx-row {
+  display: flex;
+  align-items: baseline;
+  white-space: pre;
+  color: var(--text-2);
+}
+
+.jsonx-row:hover {
+  background: var(--data-hover-bg);
+}
+
+.jsonx-caret {
+  flex: 0 0 auto;
+  /* Center the glyph in its box instead of sitting on the text baseline —
+     baseline alignment made the caret look offset against the mono text. */
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-right: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--muted-2);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.jsonx-caret--empty {
+  cursor: default;
+  visibility: hidden;
+}
+
+.jsonx-collapsed {
+  background: none;
+  border: none;
+  padding: 0 6px;
+  margin: 0 2px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.jsonx-collapsed:hover {
+  background: var(--panel-2);
+  color: var(--text-2);
+}
+
+/* ---------------------------------------------------------------------------
+   Result — nested view (relational JSON document: parent + child array)
+   --------------------------------------------------------------------------- */
+.result-nested__ghead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  background: var(--data-header-bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  padding: 4px 8px;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: left;
+}
+
+.result-nested__ghead:hover { background: var(--panel-3); }
+
+.result-nested__gsummary {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.result-nested__json {
+  border-top: none;
+  background: var(--panel);
+}
+
+/* The nested group is now a self-contained card: header row + JSON body. */
+.result-nested__group {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------------------
+   Result — pagination bar (client-side paging of rows / nested groups)
+   --------------------------------------------------------------------------- */
+.result-pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  font-size: var(--text-xs);
+  /* A plain flex row after the scrolling body — always the last line of the
+     result area, never overlapping the rows. */
+  flex: 0 0 auto;
+}
+
+.result-pager__btn {
+  padding: 0 8px;
+  line-height: 1.6;
+}
+
+.result-pager__range { color: var(--text-2); }
+
+.result-pager__size {
+  margin-left: auto;
+  background: var(--panel-2);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  padding: 1px 4px;
+}
+
+.result-pager__unit { user-select: none; }
+
+/* ---------------------------------------------------------------------------
+   Result — chart view (bar / line / area / pie)
+   --------------------------------------------------------------------------- */
+.result-chart {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.result-chart__cfg {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.result-chart__lbl {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.result-chart__sel {
+  background: var(--panel);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  padding: 1px 4px;
+}
+
+.result-chart__ys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.result-chart__chip {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  padding: 1px 8px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+
+.result-chart__chip:hover { color: var(--text-2); border-color: var(--border-2); }
+
+.result-chart__chip.is-on {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Fill whatever height the block gives us rather than a fixed 240px (which
+   overflowed inside a normal-sized block). The min-height keeps the responsive
+   container from ever computing a zero height. */
+.result-chart__area {
+  flex: 1 1 auto;
+  min-height: 170px;
+  padding: 6px 4px 4px;
+}
+
+.result-chart__note {
+  font-size: var(--text-xs);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.result-chart__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* ---------------------------------------------------------------------------
    Icon-button "on" state (used by the view toggle in the block header)
    --------------------------------------------------------------------------- */
 .btn.is-on {
@@ -970,6 +1288,262 @@ button {
   color: var(--accent);
   border-color: var(--accent);
 }
+
+/* ---------------------------------------------------------------------------
+   Command palette (⌘K) — favorite blocks search
+   --------------------------------------------------------------------------- */
+.palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+}
+
+.palette {
+  width: min(620px, 90vw);
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg, 10px);
+  box-shadow: var(--shadow-float, 0 12px 40px rgba(0, 0, 0, 0.45));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.palette__input {
+  background: var(--editor-bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  padding: 12px 14px;
+  outline: none;
+}
+
+.palette__list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.palette__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 7px 12px;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+.palette__item.is-active { background: var(--accent-dim); }
+
+.palette__name { color: var(--accent-text); white-space: nowrap; }
+
+.palette__sql {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.palette__empty,
+.palette__hint {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  padding: 10px 14px;
+}
+
+.palette__hint { border-top: 1px solid var(--border); }
+
+/* ---------------------------------------------------------------------------
+   Page tabs (Excel-like sheets) — bar between the canvas and the status bar
+   --------------------------------------------------------------------------- */
+.page-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 0 6px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
+  min-height: 30px;
+}
+
+.page-tabs__tab {
+  background: none;
+  border: none;
+  border-top: 2px solid transparent;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 4px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.page-tabs__tab:hover { color: var(--text-2); background: var(--panel-2); }
+
+.page-tabs__tab.is-active {
+  color: var(--text);
+  background: var(--panel-2);
+  border-top-color: var(--accent);
+}
+
+.page-tabs__input {
+  background: var(--editor-bg);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 2px 6px;
+  margin: 3px 0;
+  width: 110px;
+  outline: none;
+}
+
+.page-tabs__add {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: var(--text-base);
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.page-tabs__add:hover { color: var(--accent); }
+
+/* ---------------------------------------------------------------------------
+   Canvas node cursor — default on hover (not the "move" grab), grabbing while
+   actually dragging. Overrides React Flow's default draggable cursor.
+   --------------------------------------------------------------------------- */
+.react-flow__node.draggable { cursor: default; }
+.react-flow__node.dragging { cursor: grabbing; }
+
+/* ---------------------------------------------------------------------------
+   Group container node (colored frame behind blocks)
+   --------------------------------------------------------------------------- */
+.group-node {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  /* Clip the header fill to the rounded border so the colored background never
+     spills past the frame. */
+  overflow: hidden;
+  /* Let clicks on the empty body reach the node so it can be dragged, but keep
+     it visually recessive behind the blocks it contains. */
+}
+
+.group-node__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 10px;
+  border-bottom: 1px solid var(--border);
+  border-top-left-radius: var(--radius-md);
+  border-top-right-radius: var(--radius-md);
+  font-size: var(--text-xs);
+  position: relative;
+}
+
+/* Group resizer: no visible frame (the colored border is the frame). Corner
+   handles fade in only when the pointer is over the group. */
+.group-node__resize-line {
+  border: none !important;
+  opacity: 0 !important;
+}
+
+/* Same as blocks: invisible controls, resize cursor only. */
+.group-node__resize-handle {
+  width: 14px;
+  height: 14px;
+  background: transparent;
+  border: none;
+  opacity: 0;
+}
+
+.group-node__title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-node__title-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 1px 4px;
+}
+
+.group-node__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.group-node__icon {
+  padding: 0 5px;
+  line-height: 1.5;
+}
+
+.group-node__swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+.group-node__palette {
+  position: absolute;
+  top: 100%;
+  right: 4px;
+  z-index: var(--z-modal);
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.3));
+}
+
+.group-node__swatch-btn {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+
+.group-node__swatch-btn:hover { transform: scale(1.15); }
 
 /* ---------------------------------------------------------------------------
    Right-click context menu (portaled to <body>)

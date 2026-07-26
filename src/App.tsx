@@ -4,6 +4,8 @@ import { HomeScreen } from "./screens/HomeScreen";
 import { Toolbar } from "./components/Toolbar";
 import { Sidebar } from "./components/Sidebar";
 import { StatusBar } from "./components/StatusBar";
+import { PageTabs } from "./components/PageTabs";
+import { CommandPalette } from "./components/CommandPalette";
 import { GraftCanvas } from "./canvas/GraftCanvas";
 
 function App() {
@@ -21,7 +23,9 @@ function App() {
           <Sidebar />
           <GraftCanvas />
         </div>
+        <PageTabs />
         <StatusBar />
+        <CommandPalette />
       </div>
     </ReactFlowProvider>
   );

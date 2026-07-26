@@ -1,16 +1,39 @@
-import { useState } from "react";
-import type { QueryResult, ResultView } from "../types";
+import { memo, useEffect, useMemo, useState } from "react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell as PieCell,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import type { ChartConfig, ChartType, QueryResult, ResultView } from "../types";
+import { quoteIdent, sqlLiteral } from "../sqlFormat";
 import { BlockContextMenu, type MenuAction } from "./BlockContextMenu";
 import {
   buildNestedGroups,
   detectNestedShape,
   type Cell,
   type NestedGroup,
+  type NestedShape,
 } from "./resultShape";
 
 interface ResultTableProps {
   result: QueryResult;
   view: ResultView;
+  /** Chart-view config (persisted on the block); undefined until first shown. */
+  chartConfig?: ChartConfig;
+  /** Called when the user edits the chart config from the chart view. */
+  onChartConfigChange?: (config: ChartConfig) => void;
 }
 
 interface CellCtx {
@@ -21,11 +44,58 @@ interface CellCtx {
   columns: string[];
 }
 
-export function ResultTable({ result, view }: ResultTableProps) {
+/** Default rows (or JSON items) shown per page. */
+const DEFAULT_PAGE_SIZE = 100;
+type PageSize = number | "all";
+const PAGE_SIZES: PageSize[] = [50, 100, 500, "all"];
+
+/** Max marks plotted in the chart view (readability + render cost). */
+const CHART_MAX_POINTS = 500;
+/** Rows sampled when inferring which columns are numeric. */
+const NUMERIC_SCAN_ROWS = 200;
+
+export const ResultTable = memo(function ResultTable({
+  result,
+  view,
+  chartConfig,
+  onChartConfigChange,
+}: ResultTableProps) {
   const [menu, setMenu] = useState<
     | { x: number; y: number; actions: MenuAction[] }
     | null
   >(null);
+
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
+
+  // Detect + group once per result. This keeps row *references* only — no
+  // per-cell objects — so a 50k-row join stays cheap.
+  const nested = useMemo(() => {
+    if (view !== "json") return null;
+    const shape = detectNestedShape(result);
+    if (!shape) return null;
+    return { shape, groups: buildNestedGroups(result, shape) };
+  }, [result, view]);
+
+  const isChart = view === "chart";
+  const isJson = view === "json";
+  const total = isChart
+    ? 0
+    : isJson && nested
+    ? nested.groups.length
+    : result.rows.length;
+
+  // Reset to the first page whenever the data, the view, or the page size
+  // changes (each can change what "page 0" means).
+  useEffect(() => {
+    setPage(0);
+  }, [result, view, pageSize]);
+
+  const size = pageSize === "all" ? Math.max(total, 1) : pageSize;
+  const pageCount = Math.max(1, Math.ceil(total / size));
+  const clampedPage = Math.min(page, pageCount - 1);
+  const start = clampedPage * size;
+  const end = Math.min(start + size, total);
 
   const openCellMenu = (e: React.MouseEvent, ctx: CellCtx) => {
     e.preventDefault();
@@ -39,50 +109,97 @@ export function ResultTable({ result, view }: ResultTableProps) {
     setMenu({ x: e.clientX, y: e.clientY, actions: rowActions(ctx) });
   };
 
+  const pagedFlat: QueryResult = useMemo(
+    () => ({ ...result, rows: result.rows.slice(start, end) }),
+    [result, start, end],
+  );
+
+  // Materialize objects ONLY for the visible page — never the whole result.
+  const pagedJson = useMemo(() => {
+    if (!isJson) return null;
+    const cols = result.columns;
+    if (nested) {
+      return nested.groups
+        .slice(start, end)
+        .map((g) => groupToObject(g, nested.shape, cols));
+    }
+    return result.rows.slice(start, end).map((row) => rowToObject(row, cols));
+  }, [isJson, nested, result, start, end]);
+
   const body = (() => {
-    if (view === "nested") {
-      const shape = detectNestedShape(result);
-      if (shape) {
-        return (
-          <NestedView
-            groups={buildNestedGroups(result, shape)}
-            childLabel={shape.childLabel}
-            onCellContextMenu={openCellMenu}
-            columns={result.columns}
-          />
-        );
-      }
-      // No repetition to collapse → fall back to records so the user still
-      // sees something useful.
+    if (isChart) {
       return (
-        <RecordsView
+        <ChartView
           result={result}
-          onCellContextMenu={openCellMenu}
-          onRowContextMenu={openRowMenu}
+          config={chartConfig}
+          onChange={onChartConfigChange}
         />
       );
     }
-    if (view === "records") {
-      return (
-        <RecordsView
-          result={result}
-          onCellContextMenu={openCellMenu}
-          onRowContextMenu={openRowMenu}
-        />
-      );
+    if (isJson) {
+      return <JsonTreeView items={pagedJson ?? []} />;
     }
     return (
       <TableView
-        result={result}
+        result={pagedFlat}
+        rowOffset={start}
         onCellContextMenu={openCellMenu}
         onRowContextMenu={openRowMenu}
       />
     );
   })();
 
+  // Only show the pager once there's more than a default page worth of data
+  // (never in chart view, which plots the whole result).
+  const showPager = !isChart && total > DEFAULT_PAGE_SIZE;
+
   return (
-    <>
-      {body}
+    <div className="result-view">
+      {/* The scrolling area is INSIDE this column, so the pager below is a
+          plain flex sibling that can never drift over the content. */}
+      <div className="result-view__body">{body}</div>
+      {showPager && (
+        <div className="result-pager nodrag">
+          <button
+            className="btn result-pager__btn"
+            disabled={clampedPage <= 0}
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            title="Previous page"
+          >
+            ‹
+          </button>
+          <span className="result-pager__range">
+            {total === 0 ? "0" : `${start + 1}–${end}`}{" "}
+            <span className="text-muted">/ {total}</span>
+          </span>
+          <button
+            className="btn result-pager__btn"
+            disabled={clampedPage >= pageCount - 1}
+            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            title="Next page"
+          >
+            ›
+          </button>
+          <select
+            className="result-pager__size"
+            value={String(pageSize)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setPageSize(v === "all" ? "all" : Number(v));
+            }}
+            title="Items per page"
+          >
+            {PAGE_SIZES.map((s) => (
+              <option key={String(s)} value={String(s)}>
+                {s === "all" ? "Tout" : s}
+              </option>
+            ))}
+          </select>
+          <span className="text-muted result-pager__unit">
+            {isJson ? "éléments" : "lignes"}/page
+          </span>
+        </div>
+      )}
       {menu && (
         <BlockContextMenu
           x={menu.x}
@@ -91,19 +208,21 @@ export function ResultTable({ result, view }: ResultTableProps) {
           onClose={() => setMenu(null)}
         />
       )}
-    </>
+    </div>
   );
-}
+});
 
 // ============================================================================
 // Table view
 // ============================================================================
 function TableView({
   result,
+  rowOffset,
   onCellContextMenu,
   onRowContextMenu,
 }: {
   result: QueryResult;
+  rowOffset: number;
   onCellContextMenu: (e: React.MouseEvent, ctx: CellCtx) => void;
   onRowContextMenu: (
     e: React.MouseEvent,
@@ -121,37 +240,40 @@ function TableView({
         </tr>
       </thead>
       <tbody>
-        {result.rows.map((row, i) => (
-          <tr key={i}>
-            <td
-              className="result-table__rownum"
-              onContextMenu={(e) =>
-                onRowContextMenu(e, {
-                  rowIndex: i,
-                  row,
-                  columns: result.columns,
-                })
-              }
-            >
-              {i + 1}
-            </td>
-            {row.map((cell, j) => (
-              <CellTd
-                key={j}
-                value={cell}
+        {result.rows.map((row, i) => {
+          const abs = rowOffset + i;
+          return (
+            <tr key={abs}>
+              <td
+                className="result-table__rownum"
                 onContextMenu={(e) =>
-                  onCellContextMenu(e, {
-                    col: result.columns[j],
-                    value: cell,
-                    rowIndex: i,
+                  onRowContextMenu(e, {
+                    rowIndex: abs,
                     row,
                     columns: result.columns,
                   })
                 }
-              />
-            ))}
-          </tr>
-        ))}
+              >
+                {abs + 1}
+              </td>
+              {row.map((cell, j) => (
+                <CellTd
+                  key={j}
+                  value={cell}
+                  onContextMenu={(e) =>
+                    onCellContextMenu(e, {
+                      col: result.columns[j],
+                      value: cell,
+                      rowIndex: abs,
+                      row,
+                      columns: result.columns,
+                    })
+                  }
+                />
+              ))}
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -186,272 +308,503 @@ function CellTd({
 }
 
 // ============================================================================
-// Records view
+// JSON view — interactive tree (fold/unfold like a JSON editor).
+// Feeds on either the re-nested relational document or the flat row objects.
 // ============================================================================
-function RecordsView({
-  result,
-  onCellContextMenu,
-  onRowContextMenu,
-}: {
-  result: QueryResult;
-  onCellContextMenu: (e: React.MouseEvent, ctx: CellCtx) => void;
-  onRowContextMenu: (
-    e: React.MouseEvent,
-    ctx: Omit<CellCtx, "col" | "value">,
-  ) => void;
-}) {
+type FoldMode = "auto" | "open" | "closed";
+
+function JsonTreeView({ items }: { items: unknown[] }) {
+  const [mode, setMode] = useState<FoldMode>("auto");
+  const [overrides, setOverrides] = useState<Record<string, boolean>>({});
+
+  // Reset fold state when the shown slice changes (new query / page).
+  useEffect(() => {
+    setMode("auto");
+    setOverrides({});
+  }, [items]);
+
+  const isOpen = (path: string, depth: number): boolean => {
+    if (path in overrides) return overrides[path];
+    if (mode === "open") return true;
+    if (mode === "closed") return depth < 1; // keep the root array open
+    return depth < 2; // auto: root + first level open, deeper collapsed
+  };
+  const toggle = (path: string, depth: number) =>
+    setOverrides((o) => ({ ...o, [path]: !isOpen(path, depth) }));
+
   return (
-    <div className="result-records">
-      {result.rows.map((row, i) => (
-        <div
-          key={i}
-          className="result-record"
-          onContextMenu={(e) =>
-            onRowContextMenu(e, { rowIndex: i, row, columns: result.columns })
-          }
+    <div className="jsonx">
+      <div className="jsonx__toolbar">
+        <button
+          className="btn jsonx__tbtn"
+          onClick={() => {
+            setMode("open");
+            setOverrides({});
+          }}
+          title="Expand all"
         >
-          <div className="result-record__index">#{i + 1}</div>
-          <div className="result-record__fields">
-            {result.columns.map((col, j) => (
-              <div
-                key={col}
-                className="result-record__field"
-                onContextMenu={(e) =>
-                  onCellContextMenu(e, {
-                    col,
-                    value: row[j],
-                    rowIndex: i,
-                    row,
-                    columns: result.columns,
-                  })
-                }
-              >
-                <span className="result-record__key">{col}</span>
-                <ValueCell value={row[j]} />
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ============================================================================
-// Nested view — auto-collapsed join result, JSON-tree interactions
-// ============================================================================
-function NestedView({
-  groups,
-  childLabel,
-  columns,
-  onCellContextMenu,
-}: {
-  groups: NestedGroup[];
-  childLabel: string;
-  columns: string[];
-  onCellContextMenu: (e: React.MouseEvent, ctx: CellCtx) => void;
-}) {
-  // Two tri-state stores keyed by the group index (parent) and by
-  // "gi:ii" (individual child items). Default: parents expanded, items
-  // collapsed to a one-line summary.
-  const [groupClosed, setGroupClosed] = useState<Record<number, boolean>>({});
-  const [itemOpen, setItemOpen] = useState<Record<string, boolean>>({});
-  const [allOpen, setAllOpen] = useState<boolean | null>(null);
-
-  const toggleGroup = (gi: number) =>
-    setGroupClosed((p) => ({ ...p, [gi]: !p[gi] }));
-  const toggleItem = (gi: number, ii: number) => {
-    const key = `${gi}:${ii}`;
-    setItemOpen((p) => ({ ...p, [key]: !isItemOpen(gi, ii, p) }));
-  };
-  const isItemOpen = (
-    gi: number,
-    ii: number,
-    state: Record<string, boolean> = itemOpen,
-  ) => {
-    const explicit = state[`${gi}:${ii}`];
-    if (explicit !== undefined) return explicit;
-    return allOpen === true;
-  };
-
-  const expandAll = () => {
-    setAllOpen(true);
-    setGroupClosed({});
-    setItemOpen({});
-  };
-  const collapseAll = () => {
-    setAllOpen(false);
-    setGroupClosed({});
-    setItemOpen({});
-  };
-
-  return (
-    <div className="result-nested">
-      <div className="result-nested__toolbar">
-        <button className="btn result-nested__tbtn" onClick={expandAll} title="Expand all">
           ▼ all
         </button>
-        <button className="btn result-nested__tbtn" onClick={collapseAll} title="Collapse all">
+        <button
+          className="btn jsonx__tbtn"
+          onClick={() => {
+            setMode("closed");
+            setOverrides({});
+          }}
+          title="Collapse all"
+        >
           ▶ all
         </button>
         <span className="text-muted">
-          {groups.length} group{groups.length > 1 ? "s" : ""}
+          {items.length} élément{items.length > 1 ? "s" : ""}
         </span>
       </div>
-
-      {groups.map((g, gi) => {
-        const closed = groupClosed[gi] === true;
-        return (
-          <div key={gi} className="result-nested__group">
-            <div className="result-nested__index">#{gi + 1}</div>
-            <div className="result-nested__body">
-              {g.parent.map((f) => (
-                <div
-                  key={f.colIndex}
-                  className="result-nested__field"
-                  onContextMenu={(e) =>
-                    onCellContextMenu(e, {
-                      col: f.key,
-                      value: f.value,
-                      rowIndex: gi,
-                      row: [],
-                      columns,
-                    })
-                  }
-                >
-                  <span className="result-nested__key">{f.key}</span>
-                  <ValueCell value={f.value} />
-                </div>
-              ))}
-
-              <div className="result-nested__sub">
-                <button
-                  className="result-nested__sub-title result-nested__sub-title--btn"
-                  onClick={() => toggleGroup(gi)}
-                  title={closed ? "Expand" : "Collapse"}
-                >
-                  <span className="result-nested__caret">{closed ? "▶" : "▼"}</span>
-                  {childLabel}
-                  <span className="result-nested__count">{g.children.length}</span>
-                </button>
-
-                {!closed && (
-                  g.children.length === 0 ? (
-                    <div className="result-nested__empty">—</div>
-                  ) : (
-                    <div className="result-nested__array">
-                      {g.children.map((item, ii) => {
-                        const open = isItemOpen(gi, ii);
-                        const summary = summarizeItem(item);
-                        return (
-                          <div key={ii} className="result-nested__item">
-                            <button
-                              className="result-nested__item-head"
-                              onClick={() => toggleItem(gi, ii)}
-                              title={open ? "Collapse item" : "Expand item"}
-                            >
-                              <span className="result-nested__caret">
-                                {open ? "▼" : "▶"}
-                              </span>
-                              <span className="result-nested__item-index">
-                                {ii + 1}
-                              </span>
-                              {!open && (
-                                <span className="result-nested__item-summary">
-                                  {summary}
-                                </span>
-                              )}
-                            </button>
-                            {open && (
-                              <div className="result-nested__sub-fields">
-                                {item.map((f) => (
-                                  <div
-                                    key={f.colIndex}
-                                    className="result-nested__field"
-                                    onContextMenu={(e) =>
-                                      onCellContextMenu(e, {
-                                        col: f.key,
-                                        value: f.value,
-                                        rowIndex: gi,
-                                        row: [],
-                                        columns,
-                                      })
-                                    }
-                                  >
-                                    <span className="result-nested__key">
-                                      {f.key}
-                                    </span>
-                                    <ValueCell value={f.value} />
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )
-                )}
-              </div>
-            </div>
-          </div>
-        );
-      })}
+      <div className="jsonx__body">
+        <JsonNode
+          keyName={undefined}
+          value={items}
+          depth={0}
+          path=""
+          isOpen={isOpen}
+          toggle={toggle}
+          isLast
+        />
+      </div>
     </div>
   );
 }
 
-/** One-line preview of a child item — the first non-null field, plus a hint
- *  of the second if short. Shown when the item is collapsed. */
-function summarizeItem(
-  item: Array<{ key: string; value: Cell; colIndex: number }>,
-): string {
-  const nonNull = item.filter((f) => f.value !== null);
-  if (nonNull.length === 0) return "—";
-  const parts = nonNull.slice(0, 3).map((f) => {
-    const v = String(f.value);
-    return v.length > 30 ? v.slice(0, 30) + "…" : v;
-  });
-  return parts.join(" · ");
-}
+function JsonNode({
+  keyName,
+  value,
+  depth,
+  path,
+  isOpen,
+  toggle,
+  isLast,
+}: {
+  keyName: string | undefined;
+  value: unknown;
+  depth: number;
+  path: string;
+  isOpen: (path: string, depth: number) => boolean;
+  toggle: (path: string, depth: number) => void;
+  isLast: boolean;
+}) {
+  const comma = isLast ? "" : ",";
+  const indent: React.CSSProperties = { paddingLeft: 6 + depth * 14 };
+  const keyEl =
+    keyName !== undefined ? (
+      <>
+        <span className="json-key">"{keyName}"</span>
+        <span className="json-punct">: </span>
+      </>
+    ) : null;
 
-// ============================================================================
-// Shared value cell
-// ============================================================================
-function ValueCell({ value }: { value: Cell }) {
-  if (value === null) {
+  const isObject = value !== null && typeof value === "object";
+  if (!isObject) {
     return (
-      <span className="result-record__val is-null">
-        <em>null</em>
-      </span>
+      <div className="jsonx-row" style={indent}>
+        <span className="jsonx-caret jsonx-caret--empty" />
+        {keyEl}
+        <JsonScalar value={value as Cell} />
+        <span className="json-punct">{comma}</span>
+      </div>
     );
   }
-  const isNumber = typeof value === "number";
+
+  const isArray = Array.isArray(value);
+  const entries: Array<[string, unknown]> = isArray
+    ? (value as unknown[]).map((v, i) => [String(i), v])
+    : Object.entries(value as Record<string, unknown>);
+  const open = isOpen(path, depth);
+  const openBrace = isArray ? "[" : "{";
+  const closeBrace = isArray ? "]" : "}";
+
+  if (!open) {
+    return (
+      <div className="jsonx-row" style={indent}>
+        <button className="jsonx-caret" onClick={() => toggle(path, depth)}>
+          ▶
+        </button>
+        {keyEl}
+        <span className="json-punct">{openBrace}</span>
+        <button className="jsonx-collapsed" onClick={() => toggle(path, depth)}>
+          {isArray ? `${entries.length} items` : `${entries.length} keys`}
+        </button>
+        <span className="json-punct">
+          {closeBrace}
+          {comma}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="jsonx-branch">
+      <div className="jsonx-row" style={indent}>
+        <button className="jsonx-caret" onClick={() => toggle(path, depth)}>
+          ▼
+        </button>
+        {keyEl}
+        <span className="json-punct">{openBrace}</span>
+      </div>
+      {entries.map(([k, v], i) => (
+        <JsonNode
+          key={k}
+          keyName={isArray ? undefined : k}
+          value={v}
+          depth={depth + 1}
+          path={`${path}/${k}`}
+          isOpen={isOpen}
+          toggle={toggle}
+          isLast={i === entries.length - 1}
+        />
+      ))}
+      <div className="jsonx-row" style={indent}>
+        <span className="jsonx-caret jsonx-caret--empty" />
+        <span className="json-punct">
+          {closeBrace}
+          {comma}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function JsonScalar({ value }: { value: Cell }) {
+  if (value === null) return <span className="json-null">null</span>;
+  if (typeof value === "number")
+    return <span className="json-number">{String(value)}</span>;
+  if (typeof value === "boolean")
+    return <span className="json-bool">{String(value)}</span>;
   const text = String(value);
   return (
     <span
-      className={`result-record__val${isNumber ? " is-number" : ""}`}
-      onDoubleClick={() => void navigator.clipboard?.writeText(text)}
+      className="json-string"
+      title="Double-click to copy"
+      onDoubleClick={() => copy(text)}
     >
-      {text}
+      "{text}"
     </span>
   );
 }
 
 // ============================================================================
-// Cell / row context-menu actions
+// Chart view — plot the result (bar / line / area / pie)
 // ============================================================================
-function sqlLiteral(v: Cell): string {
-  if (v === null) return "NULL";
-  if (typeof v === "number") return String(v);
-  if (typeof v === "boolean") return v ? "1" : "0";
-  return `'${String(v).replace(/'/g, "''")}'`;
+function ChartView({
+  result,
+  config,
+  onChange,
+}: {
+  result: QueryResult;
+  config?: ChartConfig;
+  onChange?: (c: ChartConfig) => void;
+}) {
+  const columns = result.columns;
+  const numericCols = useMemo(() => numericColumns(result), [result]);
+  const cfg = useMemo(
+    () => sanitizeConfig(config, result, numericCols),
+    [config, result, numericCols],
+  );
+  // Plotting tens of thousands of marks is unreadable AND freezes the canvas —
+  // cap the series and say so.
+  const truncated = result.rows.length > CHART_MAX_POINTS;
+  const data = useMemo(
+    () =>
+      result.rows
+        .slice(0, CHART_MAX_POINTS)
+        .map((row) => rowToObject(row, result.columns)),
+    [result],
+  );
+
+  // Colors/ink read from the live CSS tokens (once per mount — getComputedStyle
+  // forces a style recalc, so it must not run on every render).
+  const theme = useMemo(() => {
+    const gridColor = readVar("--border", "#2d3242");
+    return {
+      palette: readPalette(),
+      axisColor: readVar("--muted", "#8b91a3"),
+      gridColor,
+      tooltipStyle: {
+        background: readVar("--panel", "#1a1d27"),
+        border: `1px solid ${gridColor}`,
+        borderRadius: 6,
+        fontSize: 12,
+        color: readVar("--text-2", "#b8bece"),
+      } as React.CSSProperties,
+    };
+  }, []);
+  const { palette, axisColor, gridColor, tooltipStyle } = theme;
+
+  const yCandidates = numericCols.length ? numericCols : columns;
+  const update = (patch: Partial<ChartConfig>) => onChange?.({ ...cfg, ...patch });
+  const toggleY = (col: string) => {
+    if (cfg.type === "pie") {
+      update({ yCols: [col] });
+      return;
+    }
+    const next = cfg.yCols.includes(col)
+      ? cfg.yCols.filter((c) => c !== col)
+      : [...cfg.yCols, col];
+    if (next.length) update({ yCols: next });
+  };
+
+  const canPlot = cfg.xCol && cfg.yCols.length > 0 && data.length > 0;
+
+  return (
+    <div className="result-chart nodrag">
+      <div className="result-chart__cfg">
+        <select
+          className="result-chart__sel"
+          value={cfg.type}
+          onChange={(e) => update({ type: e.target.value as ChartType })}
+          title="Chart type"
+        >
+          <option value="bar">Bar</option>
+          <option value="line">Line</option>
+          <option value="area">Area</option>
+          <option value="pie">Pie</option>
+        </select>
+        <span className="result-chart__lbl">X</span>
+        <select
+          className="result-chart__sel"
+          value={cfg.xCol}
+          onChange={(e) => update({ xCol: e.target.value })}
+          title="X axis / labels"
+        >
+          {columns.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+        <span className="result-chart__lbl">{cfg.type === "pie" ? "Val" : "Y"}</span>
+        <div className="result-chart__ys">
+          {yCandidates.map((c) => (
+            <button
+              key={c}
+              className={`result-chart__chip${cfg.yCols.includes(c) ? " is-on" : ""}`}
+              onClick={() => toggleY(c)}
+              title={`Toggle series: ${c}`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+        {truncated && (
+          <span className="text-muted result-chart__note">
+            {CHART_MAX_POINTS} premiers points sur {result.rows.length}
+          </span>
+        )}
+      </div>
+      <div className="result-chart__area">
+        {canPlot ? (
+          <ResponsiveContainer width="100%" height="100%">
+            {renderChart(cfg, data, palette, axisColor, gridColor, tooltipStyle)}
+          </ResponsiveContainer>
+        ) : (
+          <div className="result-chart__empty">
+            Choisis une colonne X et au moins une série Y.
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
+/** Build the concrete Recharts element for the active config. */
+function renderChart(
+  cfg: ChartConfig,
+  data: Record<string, Cell>[],
+  palette: string[],
+  axisColor: string,
+  gridColor: string,
+  tooltipStyle: React.CSSProperties,
+): React.ReactElement {
+  const tick = { fill: axisColor, fontSize: 11 };
+  const showLegend = cfg.yCols.length > 1;
+  const margin = { top: 8, right: 12, bottom: 4, left: 0 };
+
+  if (cfg.type === "pie") {
+    return (
+      <PieChart margin={margin}>
+        <Tooltip contentStyle={tooltipStyle} />
+        <Legend />
+        <Pie
+          data={data}
+          dataKey={cfg.yCols[0]}
+          nameKey={cfg.xCol}
+          outerRadius="80%"
+          stroke={gridColor}
+          strokeWidth={2}
+        >
+          {data.map((_, i) => (
+            <PieCell key={i} fill={palette[i % palette.length]} />
+          ))}
+        </Pie>
+      </PieChart>
+    );
+  }
+
+  if (cfg.type === "line") {
+    return (
+      <LineChart data={data} margin={margin}>
+        <CartesianGrid stroke={gridColor} vertical={false} />
+        <XAxis dataKey={cfg.xCol} tick={tick} stroke={axisColor} />
+        <YAxis tick={tick} stroke={axisColor} width={44} />
+        <Tooltip contentStyle={tooltipStyle} />
+        {showLegend && <Legend />}
+        {cfg.yCols.map((c, i) => (
+          <Line
+            key={c}
+            type="monotone"
+            dataKey={c}
+            stroke={palette[i % palette.length]}
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 4 }}
+          />
+        ))}
+      </LineChart>
+    );
+  }
+
+  if (cfg.type === "area") {
+    return (
+      <AreaChart data={data} margin={margin}>
+        <CartesianGrid stroke={gridColor} vertical={false} />
+        <XAxis dataKey={cfg.xCol} tick={tick} stroke={axisColor} />
+        <YAxis tick={tick} stroke={axisColor} width={44} />
+        <Tooltip contentStyle={tooltipStyle} />
+        {showLegend && <Legend />}
+        {cfg.yCols.map((c, i) => (
+          <Area
+            key={c}
+            type="monotone"
+            dataKey={c}
+            stroke={palette[i % palette.length]}
+            fill={palette[i % palette.length]}
+            fillOpacity={0.2}
+            strokeWidth={2}
+          />
+        ))}
+      </AreaChart>
+    );
+  }
+
+  // bar (default)
+  return (
+    <BarChart data={data} margin={margin}>
+      <CartesianGrid stroke={gridColor} vertical={false} />
+      <XAxis dataKey={cfg.xCol} tick={tick} stroke={axisColor} />
+      <YAxis tick={tick} stroke={axisColor} width={44} />
+      <Tooltip contentStyle={tooltipStyle} cursor={{ fill: gridColor, fillOpacity: 0.25 }} />
+      {showLegend && <Legend />}
+      {cfg.yCols.map((c, i) => (
+        <Bar key={c} dataKey={c} fill={palette[i % palette.length]} radius={[4, 4, 0, 0]} />
+      ))}
+    </BarChart>
+  );
 }
 
+/** Columns whose non-null values are all numbers (candidate Y series).
+ *  Scans a sample: column types are homogeneous in practice, and a full scan of
+ *  a 50k-row result on every config change is wasted work. */
+function numericColumns(result: QueryResult): string[] {
+  const { columns, rows } = result;
+  const limit = Math.min(rows.length, NUMERIC_SCAN_ROWS);
+  return columns.filter((_, j) => {
+    let sawNumber = false;
+    for (let r = 0; r < limit; r++) {
+      const v = rows[r][j];
+      if (v === null) continue;
+      if (typeof v === "number") {
+        sawNumber = true;
+        continue;
+      }
+      return false;
+    }
+    return sawNumber;
+  });
+}
+
+/** Resolve the effective chart config: fall back to a sensible auto default and
+ *  drop columns that no longer exist (e.g. after the query changed). */
+function sanitizeConfig(
+  config: ChartConfig | undefined,
+  result: QueryResult,
+  numericCols: string[],
+): ChartConfig {
+  const cols = result.columns;
+  const pickY = (xCol: string): string[] => {
+    const pool = (numericCols.length ? numericCols : cols).filter((c) => c !== xCol);
+    return pool.length ? [pool[0]] : cols.length ? [cols[0]] : [];
+  };
+  if (config) {
+    const xCol = cols.includes(config.xCol) ? config.xCol : cols[0] ?? "";
+    const yCols = config.yCols.filter((c) => cols.includes(c));
+    return { type: config.type, xCol, yCols: yCols.length ? yCols : pickY(xCol) };
+  }
+  const xCol = cols[0] ?? "";
+  return { type: "bar", xCol, yCols: pickY(xCol) };
+}
+
+/** Read the 8-slot categorical chart palette from CSS tokens (theme-aware). */
+function readPalette(): string[] {
+  const fallback = [
+    "#3987e5", "#d95926", "#199e70", "#c98500",
+    "#d55181", "#008300", "#9085e9", "#e66767",
+  ];
+  if (typeof window === "undefined") return fallback;
+  const s = getComputedStyle(document.documentElement);
+  const out: string[] = [];
+  for (let i = 1; i <= 8; i++) {
+    const v = s.getPropertyValue(`--chart-${i}`).trim();
+    if (v) out.push(v);
+  }
+  return out.length ? out : fallback;
+}
+
+/** Read a single CSS custom property off :root, with a fallback. */
+function readVar(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+// ============================================================================
+// Shared helpers
+// ============================================================================
+/** Map one positional row into a `{ column: value }` object. */
+function rowToObject(row: Cell[], columns: string[]): Record<string, Cell> {
+  const o: Record<string, Cell> = {};
+  for (let i = 0; i < columns.length; i++) o[columns[i]] = row[i];
+  return o;
+}
+
+/** Rebuild a nested group into a plain JSON object: parent fields + a child
+ *  array under the detected label. Column order is preserved. Called only for
+ *  the groups currently on screen. */
+function groupToObject(
+  g: NestedGroup,
+  shape: NestedShape,
+  columns: string[],
+): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const i of shape.parentIndexes) o[columns[i]] = g.parent[i];
+  o[shape.childLabel] = g.children.map((row) => {
+    const c: Record<string, Cell> = {};
+    for (const i of shape.childIndexes) c[columns[i]] = row[i];
+    return c;
+  });
+  return o;
+}
+
+// ============================================================================
+// Cell / row context-menu actions (table view)
+// ============================================================================
 function rowAsJson(row: Cell[], columns: string[]): string {
   const obj: Record<string, Cell> = {};
   columns.forEach((c, i) => (obj[c] = row[i]));

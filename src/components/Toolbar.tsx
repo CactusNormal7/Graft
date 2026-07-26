@@ -17,8 +17,10 @@ export function Toolbar() {
   const dbPath = useGraftStore((s) => s.dbPath);
   const nodeCount = useGraftStore((s) => s.nodes.length);
   const addBlock = useGraftStore((s) => s.addBlock);
+  const addGroup = useGraftStore((s) => s.addGroup);
   const runAll = useGraftStore((s) => s.runAll);
   const saveNotebook = useGraftStore((s) => s.saveNotebook);
+  const importDataFile = useGraftStore((s) => s.importDataFile);
   const goHome = useGraftStore((s) => s.goHome);
 
   const { zoomIn, zoomOut, fitView } = useReactFlow();
@@ -79,13 +81,32 @@ export function Toolbar() {
         )}
       </div>
 
+      <button className="btn" onClick={addGroup} title="Add a group container">
+        + Group
+      </button>
+
       <button className="btn" onClick={runAll} disabled={nodeCount === 0}>
         ▶ Run all
       </button>
       <button className="btn" onClick={saveNotebook}>
         Save
       </button>
-      <button className="btn" disabled title="Command palette — coming in a later version">
+      <button
+        className="btn"
+        onClick={() => void importDataFile()}
+        title="Import a nested .json (→ multi-table INSERTs) or a .sql file"
+      >
+        Import…
+      </button>
+      <button
+        className="btn"
+        title="Command palette — search favorite blocks (⌘K / Ctrl+K)"
+        onClick={() =>
+          window.dispatchEvent(
+            new KeyboardEvent("keydown", { key: "k", metaKey: true }),
+          )
+        }
+      >
         ⌘K
       </button>
 

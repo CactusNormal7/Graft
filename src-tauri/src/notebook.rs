@@ -23,6 +23,18 @@ pub fn load_notebook(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+/// Write arbitrary UTF-8 text to `path` (used to export generated `.sql`).
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    fs::write(&path, contents).map_err(|e| e.to_string())
+}
+
+/// Read arbitrary UTF-8 text from `path` (used to import `.sql` / `.json`).
+#[tauri::command]
+pub fn read_text_file(path: String) -> Result<String, String> {
+    fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 /// True if a file exists at `path` (used to prune stale recent-project entries).
 #[tauri::command]
 pub fn path_exists(path: String) -> bool {
