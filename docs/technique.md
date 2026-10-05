@@ -15,6 +15,7 @@
 | État | **Zustand** | évite les re-renders en cascade du Context API |
 | Graphiques | **Recharts** (`recharts`) | vue `chart` des résultats (bar/line/area/pie), déclaratif React ; compromis : plus lourd que uPlot/visx, à réévaluer si perf |
 | Drivers DB | **sqlx** — **Postgres + MySQL + SQLite** | API async unifiée multi-moteur |
+| Tests | **Vitest** (frontend) + `cargo test` (backend) | Vitest réutilise la config Vite, aucun outillage à part |
 
 > Ne pas proposer d'alternative à la stack sans signaler explicitement le compromis.
 
@@ -109,6 +110,8 @@ Graft/
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
 │   ├── sqlFormat.ts          # quoteIdent / sqlLiteral (échappement SQL centralisé)
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
+│   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
+│   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
 │   ├── store/
 │   │   ├── useGraftStore.ts  # store Zustand (view, pages, nodes/edges de la page active, dbPath, palette, actions)
 │   │   └── snippets.ts       # favoris : expansion {{nom}} + normalisation des noms
@@ -145,16 +148,19 @@ Graft/
 │       ├── ChartView.tsx     # vue chart : Recharts (bar/line/area/pie) + config
 │       ├── resultShape.ts    # détection parent→enfants d'un JOIN, rowToObject (colonnes dupliquées suffixées _2…)
 │       ├── orm.ts            # pont relationnel : résultat/JSON imbriqué → INSERT multi-tables
+│       ├── rowSql.ts         # SQL des actions par ligne (UPDATE / DELETE / dupliquer / ouvrir) sur table résolue
 │       └── clipboard.ts      # copie presse-papiers
 └── src-tauri/                # backend Rust (Tauri)
     ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
-    ├── capabilities/default.json  # permissions (core, opener, dialog)
+    ├── capabilities/default.json  # permissions du webview : `core:default` uniquement
     └── src/
         ├── main.rs           # appelle graft_lib::run()
-        ├── lib.rs            # Builder Tauri + enregistrement des commandes
+        ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
         ├── db.rs             # moteur SQLite (execute_sql, introspect_schema) + tests
-        └── notebook.rs       # E/S fichiers (écriture atomique), default_project_dir / create_project_paths + tests
+        ├── notebook.rs       # E/S fichiers (atomique, .graft only / chemins accordés), projets + tests
+        ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
+        └── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
 ```
 
 ## Flux de données
@@ -209,6 +215,34 @@ Un **projet** = un fichier `.graft` + une connexion (type + base). Cycle de vie 
   `openProjectFromDialog()` (Open file…) lit le JSON via `load_notebook` et
   reconstruit `name`/`dbType`/`dbPath`/nodes/edges. Si le fichier est illisible,
   l'entrée est purgée des récents.
+- **Revenir** : `goHome()` garde le projet chargé ; l'accueil affiche alors
+  « ↩ Back to <projet> » (`resumeProject()`).
+
+### Modifications non sauvegardées
+Le projet est **« dirty »** quand ce qui serait écrit sur disque diffère de ce
+qui a été sauvegardé ou ouvert en dernier. Plutôt que de marquer chaque action,
+le store compare une **empreinte** (`fingerprint` = `serializeNotebook` en JSON,
+sans `dbSchema`) à celle enregistrée par `markSaved` (création, ouverture,
+sauvegarde). Conséquence : ce que le fichier ne stocke pas — résultats, statut
+d'exécution, sélection, viewport — ne rend jamais le projet dirty ; éditer du
+SQL, déplacer/redimensionner un bloc, renommer, changer de vue de résultat,
+oui.
+
+- `hasUnsavedChanges(state)` : calcul **exact et synchrone**, utilisé par les
+  gardes. `createProject` et `openProjectByPath` demandent confirmation
+  (`confirmDialog` natif, « Discard changes ») avant d'abandonner des
+  changements ; refus → rien ne change (`createProject` renvoie `false` et la
+  modale reste ouverte).
+- `state.dirty` : même information, **débouncée** (250 ms, `subscribe` sur
+  `nodes`/`edges`/`pages`/`snippets`) pour l'UI — point orange après le nom du
+  projet dans la toolbar, « Save ● », « ↩ Back to <projet> ● » sur l'accueil.
+- Chaque bascule de `dirty` est poussée au backend (`set_unsaved_changes`) :
+  `lib.rs` intercepte **la fermeture de la fenêtre** (`WindowEvent::CloseRequested`)
+  et **la sortie de l'app** (`RunEvent::ExitRequested` sans code, ex. ⌘Q sur
+  macOS) et affiche une confirmation native « Quit without saving » ; le drapeau
+  est remis à zéro avant de fermer pour ne pas redemander.
+- **⌘S / Ctrl+S** sauvegarde (écouteur global dans `App.tsx`, actif sur le
+  canvas, y compris depuis un éditeur).
 
 ### Projets récents
 Liste persistée dans **`localStorage`** (`graft.recentProjects`, max 12) :
@@ -250,14 +284,55 @@ clic, supprimable (✕).
 | `introspect_schema` | `(db_path: String) -> Result<Vec<TableInfo>, String>` | structure SQLite : tables/vues, colonnes (type, notnull, pk) et **clés étrangères** |
 | `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` (atomique) |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
-| `write_text_file` | `(path: String, contents: String) -> Result<(), String>` | écrit un fichier texte (export `.sql`, atomique) |
-| `read_text_file` | `(path: String) -> Result<String, String>` | lit un fichier texte (import `.json`/`.sql`) |
-| `path_exists` | `(path: String) -> bool` | teste l'existence d'un fichier (purge des récents) |
+| `write_text_file` | `(path: String, contents: String) -> Result<(), String>` | écrit un fichier texte (export `.sql`, atomique) — **chemin accordé en écriture** requis |
+| `read_text_file` | `(path: String) -> Result<String, String>` | lit un fichier texte (import `.json`/`.sql`) — **chemin accordé en lecture** requis |
+| `pick_project_file` | `() -> Result<Option<String>, String>` | dialogue « ouvrir un `.graft` » |
+| `pick_sqlite_file` | `() -> Result<Option<String>, String>` | dialogue « choisir une base SQLite » |
+| `pick_directory` | `() -> Result<Option<String>, String>` | dialogue « choisir un dossier » (emplacement projet) |
+| `pick_import_file` | `() -> Result<Option<String>, String>` | dialogue import `.json`/`.sql` ; **accorde la lecture** du chemin choisi |
+| `pick_export_file` | `(default_name: String) -> Result<Option<String>, String>` | dialogue export `.sql` ; **accorde l'écriture** du chemin choisi |
+| `confirm_dialog` | `(title, message, ok_label) -> Result<bool, String>` | confirmation native OK/Annuler |
+| `set_unsaved_changes` | `(dirty: bool)` | reflète l'état « non sauvegardé » pour la garde fermeture/quit |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
 > Convention : `db_path`/`sql` côté Rust (snake_case) ↔ `dbPath`/`sql` côté JS
 > (Tauri convertit automatiquement le camelCase en snake_case).
+
+## Sécurité du webview
+
+Le webview est traité comme **non fiable** : du contenu rendu (une valeur de
+cellule, un fichier importé) ne doit pas pouvoir, via une injection de script,
+lire ou écrire n'importe quel fichier du disque.
+
+- **CSP stricte** (`tauri.conf.json` → `app.security.csp`) : `default-src 'self'`,
+  `script-src 'self'` (aucun script inline ni distant), `connect-src ipc:
+  http://ipc.localhost` (uniquement l'IPC Tauri), `object-src`/`base-uri`/
+  `form-action 'none'`, polices et images `'self' data:` (les polices
+  `@fontsource` sont inlinées en `data:` par Vite). `style-src` garde
+  `'unsafe-inline'` : CodeMirror injecte ses feuilles de style et React/Recharts
+  posent des attributs `style` ; c'est pourquoi
+  `dangerousDisableAssetCspModification: ["style-src"]` empêche Tauri d'y
+  ajouter des nonces (un nonce désactiverait `'unsafe-inline'`). `devCsp` ajoute
+  seulement ce que Vite exige en dev (script inline du préambule React Refresh,
+  websocket HMR sur `localhost:1420`).
+- **Permissions minimales** (`capabilities/default.json`) : `core:default`
+  seulement. Le plugin dialog reste initialisé côté Rust mais le webview n'y a
+  **pas** accès directement ; le plugin opener (inutilisé) a été retiré.
+- **Dialogues côté backend** (`dialogs.rs`, wrappers `src/native.ts`) : le
+  backend fixe les filtres et, pour import/export, **accorde** le chemin choisi
+  dans un `FileScope` de session (`scope.rs`, accès `Read` ou `Write` par
+  chemin exact).
+- **Commandes fichiers restreintes** (`notebook.rs`) : `read_text_file` /
+  `write_text_file` refusent tout chemin non accordé (une autorisation
+  d'écriture n'est pas une autorisation de lecture) ; `save_notebook` /
+  `load_notebook` ne touchent que des fichiers **`.graft`** (les projets récents
+  vivant dans `localStorage`, on ne peut pas exiger un dialogue à chaque
+  réouverture). `path_exists` (inutilisée) a été supprimée.
+- **Limite assumée** : `execute_sql` exécute le SQL de l'utilisateur tel quel —
+  c'est la fonction même de l'outil — donc `ATTACH DATABASE` peut toujours créer
+  un fichier SQLite où l'on veut. La protection porte sur les commandes
+  fichiers, pas sur le moteur SQL.
 
 ## Format de fichier `.graft`
 
@@ -431,6 +506,22 @@ de page). Les noms de colonnes dupliqués (`SELECT a.id, b.id`) sont suffixés
 s'écraser ; dans le menu cellule, une valeur `NULL` produit `IS NULL` (et non
 `= NULL`, qui ne matche jamais).
 
+**Actions par ligne (`rowSql.ts`)** — les entrées « Set NULL / Open row /
+Duplicate row / Delete row » du menu contextuel **génèrent du SQL dans un
+nouveau bloc `script`** (`store.openSqlBlock`) au lieu de modifier la base
+directement : pour une audience DBA, une écriture se relit avant d'être
+exécutée. `resolveRowTarget(columns, dbSchema)` n'accepte une cible que si
+elle est sûre : pas de nom de colonne dupliqué, **toutes** les colonnes du
+résultat appartiennent à une seule table (vues exclues ; à égalité, la table
+ayant exactement ces colonnes, sinon refus « ambiguë »), table avec clé
+primaire déclarée, et **toute** la clé (composite comprise) présente dans le
+résultat. Sinon l'action est grisée et `hint` (infobulle) en donne la raison —
+`BlockContextMenu` utilise `aria-disabled` plutôt que `disabled` pour que
+l'infobulle reste visible. La clé d'une ligne est comparée avec `sqlEquals`
+(`IS NULL` pour une clé nulle). La duplication omet une clé
+`INTEGER PRIMARY KEY` (alias de rowid, assignée par SQLite) et recopie toute
+autre clé avec un commentaire demandant de la modifier.
+
 Structure du rendu : `.sql-block__result` (colonne flex, **sans** scroll) →
 `.result-view` → `.result-view__body` (**le** conteneur scrollable) puis
 `.result-pager`. La barre de pagination est donc un frère de la zone scrollable,
@@ -486,14 +577,20 @@ pnpm tauri dev      # lance l'app desktop (Vite + compile Rust + ouvre la fenêt
 pnpm tauri build    # build un binaire distribuable
 pnpm build          # type-check (tsc) + build frontend seul
 cargo check         # (dans src-tauri/) vérifie le backend Rust
-cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs
+pnpm test           # tests frontend (Vitest, une passe)
+pnpm test:watch     # Vitest en mode watch
+cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs / scope.rs
 ```
 
+**Tests frontend (Vitest)** — fichiers `*.test.ts` à côté du code testé,
+environnement `node`, config reprise de `vite.config.ts`. Couvrent les modules
+purs (`orm.ts`, `rowSql.ts`, `resultShape.ts`, `snippets.ts`, `sqlFormat.ts`,
+`paths.ts`) et le store (`useGraftStore.test.ts` : suivi des modifications non
+sauvegardées et confirmation, avec `@tauri-apps/api/core` et `src/native.ts`
+remplacés par des faux via `vi.mock`). Fixtures de schéma : `src/test/schema.ts`.
+
 > Sous Linux/WSL, `cargo check`/`cargo test` exigent les libs de dev GTK/WebKit
-> de Tauri (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`…). Le frontend n'a pas
-> encore de lanceur de tests (Vitest serait le choix naturel avec Vite) : les
-> modules purs `orm.ts`, `resultShape.ts`, `snippets.ts` sont les premiers
-> candidats.
+> de Tauri (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`…).
 
 > Si `cargo` est introuvable dans une nouvelle session : `source "$HOME/.cargo/env"`.
 
@@ -548,8 +645,9 @@ les blocs créés par Claude apparaissent **en direct** sur le canvas.
   (DML/DDL) uniquement via un tool distinct, opt-in par projet, avec
   confirmation côté client.
 - Plafond de lignes réutilisé (`max_rows`) pour ne pas saturer le contexte.
-- Accès fichiers limité aux projets connus (liste des récents / dossier projet) —
-  pas de lecture/écriture de chemins arbitraires.
+- Accès fichiers limité aux projets connus — même principe que la protection
+  du webview (§ Sécurité du webview : `.graft` uniquement, sinon chemins
+  explicitement accordés) ; pas de lecture/écriture de chemins arbitraires.
 - Jamais d'identifiants (mots de passe Postgres/MySQL) dans les réponses ; les
   secrets vivent dans le trousseau de l'OS.
 
@@ -607,10 +705,5 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   choisi pour une API unifiée.
 - Les arêtes entre blocs sont dessinables mais n'ont pas encore de sémantique
   d'exécution (ordre/dépendances) — à définir avec la granularité des blocs.
-- **Sécurité webview** : `tauri.conf.json` a `csp: null` et les commandes
-  `read_text_file`/`write_text_file` acceptent n'importe quel chemin. Acceptable
-  pour un POC local sans contenu distant, mais à durcir avant distribution
-  (CSP stricte, chemins limités à ceux choisis via les dialogues natifs) —
-  d'autant plus avant l'intégration MCP.
-- **Pas d'indicateur « modifié non sauvegardé »** : ouvrir un autre projet
-  abandonne silencieusement les changements non sauvegardés de l'actuel.
+- Les `alert`/`prompt` du webview (messages d'erreur, nom d'un favori) ne sont
+  pas encore remplacés par des dialogues natifs ou des modales de l'app.

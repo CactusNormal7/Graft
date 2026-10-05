@@ -15,3 +15,11 @@ export function sqlLiteral(v: SqlValue): string {
   if (typeof v === "boolean") return v ? "1" : "0";
   return `'${String(v).replace(/'/g, "''")}'`;
 }
+
+/** `ident = literal`, or `ident IS NULL` for a null value — `= NULL` never
+ *  matches in SQL. */
+export function sqlEquals(ident: string, v: SqlValue): string {
+  return v === null || v === undefined
+    ? `${quoteIdent(ident)} IS NULL`
+    : `${quoteIdent(ident)} = ${sqlLiteral(v)}`;
+}

@@ -5,12 +5,23 @@
 //! schema; these commands just read and write the serialized string at a path,
 //! plus a couple of helpers to resolve a default project directory and to derive
 //! the `.graft` / `.db` paths for a new project (cross-platform path joining).
+//!
+//! Access rules (the webview is not trusted with the whole disk):
+//! - notebook commands only touch files with the `.graft` extension;
+//! - `read_text_file` / `write_text_file` only touch paths the user picked in a
+//!   native dialog this session (see `scope.rs` and `dialogs.rs`).
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use tauri::State;
+
+use crate::scope::{Access, FileScope};
+
+/// Extension of a Graft project file.
+const PROJECT_EXTENSION: &str = "graft";
 
 /// Characters rejected in a project name: path separators and the characters
 /// Windows forbids in file names (the strictest of the shipping targets).
@@ -33,35 +44,58 @@ fn write_atomic(path: &Path, contents: &str) -> io::Result<()> {
     })
 }
 
-/// Write UTF-8 text to `path` (atomically), overwriting any existing file.
-#[tauri::command]
-pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
-    write_atomic(Path::new(&path), &contents).map_err(|e| e.to_string())
+/// `Ok` when `path` names a `.graft` project file.
+fn require_project_file(path: &Path) -> Result<(), String> {
+    let is_project = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case(PROJECT_EXTENSION));
+    if is_project {
+        Ok(())
+    } else {
+        Err(format!("not a .{PROJECT_EXTENSION} project file: {}", path.display()))
+    }
 }
 
-/// Read UTF-8 text from `path`.
-#[tauri::command]
-pub fn read_text_file(path: String) -> Result<String, String> {
-    fs::read_to_string(&path).map_err(|e| e.to_string())
+fn write_granted(scope: &FileScope, path: &Path, contents: &str) -> Result<(), String> {
+    scope.check(Access::Write, path)?;
+    write_atomic(path, contents).map_err(|e| e.to_string())
 }
 
-/// Write notebook JSON to `path`. Alias of `write_text_file`, kept as its own
-/// command so notebook persistence can evolve (format, backups) on its own.
+fn read_granted(scope: &FileScope, path: &Path) -> Result<String, String> {
+    scope.check(Access::Read, path)?;
+    fs::read_to_string(path).map_err(|e| e.to_string())
+}
+
+/// Write UTF-8 text (atomically) to a path chosen in the export dialog.
+#[tauri::command]
+pub fn write_text_file(
+    scope: State<'_, FileScope>,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
+    write_granted(&scope, Path::new(&path), &contents)
+}
+
+/// Read UTF-8 text from a path chosen in the import dialog.
+#[tauri::command]
+pub fn read_text_file(scope: State<'_, FileScope>, path: String) -> Result<String, String> {
+    read_granted(&scope, Path::new(&path))
+}
+
+/// Write notebook JSON (atomically) to a `.graft` file.
 #[tauri::command]
 pub fn save_notebook(path: String, contents: String) -> Result<(), String> {
-    write_text_file(path, contents)
+    let path = Path::new(&path);
+    require_project_file(path)?;
+    write_atomic(path, &contents).map_err(|e| e.to_string())
 }
 
-/// Read notebook JSON from `path`.
+/// Read notebook JSON from a `.graft` file.
 #[tauri::command]
 pub fn load_notebook(path: String) -> Result<String, String> {
-    read_text_file(path)
-}
-
-/// True if a file exists at `path` (used to prune stale recent-project entries).
-#[tauri::command]
-pub fn path_exists(path: String) -> bool {
-    Path::new(&path).exists()
+    let path = Path::new(&path);
+    require_project_file(path)?;
+    fs::read_to_string(path).map_err(|e| e.to_string())
 }
 
 /// Default directory for new projects: `<Documents|Home>/Graft`, created if missing.
@@ -156,8 +190,37 @@ mod tests {
         let dir = scratch_dir("exists");
         let dir_str = dir.to_string_lossy().into_owned();
         let paths = create_project_paths(dir_str.clone(), "p".into()).unwrap();
-        write_text_file(paths.project_path, "{}".into()).unwrap();
+        save_notebook(paths.project_path, "{}".into()).unwrap();
         assert!(create_project_paths(dir_str, "p".into()).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn notebook_commands_only_touch_project_files() {
+        let dir = scratch_dir("ext");
+        let graft = dir.join("a.GRAFT").to_string_lossy().into_owned();
+        let other = dir.join("a.txt").to_string_lossy().into_owned();
+        assert!(save_notebook(graft.clone(), "{}".into()).is_ok());
+        assert_eq!(load_notebook(graft).unwrap(), "{}");
+        assert!(save_notebook(other.clone(), "x".into()).is_err());
+        assert!(load_notebook(other).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn text_files_require_a_dialog_grant() {
+        let dir = scratch_dir("grant");
+        let file = dir.join("out.sql");
+        let scope = FileScope::default();
+        assert!(write_granted(&scope, &file, "SELECT 1;").is_err());
+        assert!(!file.exists());
+
+        scope.grant(Access::Write, &file);
+        write_granted(&scope, &file, "SELECT 1;").unwrap();
+        assert!(read_granted(&scope, &file).is_err(), "write grant is not a read grant");
+
+        scope.grant(Access::Read, &file);
+        assert_eq!(read_granted(&scope, &file).unwrap(), "SELECT 1;");
         fs::remove_dir_all(&dir).ok();
     }
 

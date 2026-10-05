@@ -23,6 +23,9 @@ export function HomeScreen() {
   const openProjectByPath = useGraftStore((s) => s.openProjectByPath);
   const openProjectFromDialog = useGraftStore((s) => s.openProjectFromDialog);
   const removeRecent = useGraftStore((s) => s.removeRecent);
+  const openProjectName = useGraftStore((s) => (s.projectPath ? s.projectName : null));
+  const dirty = useGraftStore((s) => s.dirty);
+  const resumeProject = useGraftStore((s) => s.resumeProject);
 
   const [showNew, setShowNew] = useState(false);
 
@@ -63,6 +66,17 @@ export function HomeScreen() {
           </div>
 
           <div style={{ display: "flex", gap: "8px" }}>
+            {openProjectName && (
+              <button
+                className="btn"
+                style={{ fontSize: "12px", padding: "7px 20px" }}
+                onClick={resumeProject}
+                title={dirty ? "Back to the open project (unsaved changes)" : "Back to the open project"}
+              >
+                ↩ Back to {openProjectName}
+                {dirty && " ●"}
+              </button>
+            )}
             <button className="btn-accent" style={{ fontSize: "12px", padding: "7px 20px" }} onClick={() => setShowNew(true)}>
               + New project
             </button>

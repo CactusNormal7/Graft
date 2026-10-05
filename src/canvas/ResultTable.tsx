@@ -1,6 +1,7 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import type { ChartConfig, QueryResult, ResultView } from "../types";
-import { quoteIdent, sqlLiteral } from "../sqlFormat";
+import { quoteIdent, sqlEquals, sqlLiteral } from "../sqlFormat";
+import { useGraftStore } from "../store/useGraftStore";
 import { BlockContextMenu, type MenuAction } from "./BlockContextMenu";
 import { ChartView } from "./ChartView";
 import { JsonTreeView } from "./JsonTreeView";
@@ -14,6 +15,17 @@ import {
   type NestedGroup,
   type NestedShape,
 } from "./resultShape";
+import {
+  deleteRowSql,
+  duplicateRowSql,
+  isKeyColumn,
+  resolveRowTarget,
+  rowKeyCondition,
+  selectRowSql,
+  updateCellSql,
+  type RowTarget,
+  type RowTargetResult,
+} from "./rowSql";
 
 interface ResultTableProps {
   result: QueryResult;
@@ -24,12 +36,24 @@ interface ResultTableProps {
   onChartConfigChange?: (config: ChartConfig) => void;
 }
 
-interface CellCtx {
-  col: string;
-  value: Cell;
+interface RowCtx {
   rowIndex: number;
   row: Cell[];
   columns: string[];
+}
+
+interface CellCtx extends RowCtx {
+  col: string;
+  colIndex: number;
+  value: Cell;
+}
+
+/** What the context-menu actions need beyond the clicked cell/row. */
+interface ActionEnv {
+  /** Table the result's rows can be written back to (or why not). */
+  target: RowTargetResult;
+  /** Open generated SQL in a new block. */
+  openSql: (title: string, sql: string) => void;
 }
 
 /** Default rows (or JSON items) shown per page. */
@@ -47,6 +71,17 @@ export const ResultTable = memo(function ResultTable({
     | { x: number; y: number; actions: MenuAction[] }
     | null
   >(null);
+
+  const dbSchema = useGraftStore((s) => s.dbSchema);
+  const openSqlBlock = useGraftStore((s) => s.openSqlBlock);
+  const target = useMemo(
+    () => resolveRowTarget(result.columns, dbSchema),
+    [result.columns, dbSchema],
+  );
+  const env: ActionEnv = {
+    target,
+    openSql: (title, sql) => openSqlBlock(title, sql, "script"),
+  };
 
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
@@ -83,13 +118,13 @@ export const ResultTable = memo(function ResultTable({
   const openCellMenu = (e: React.MouseEvent, ctx: CellCtx) => {
     e.preventDefault();
     e.stopPropagation();
-    setMenu({ x: e.clientX, y: e.clientY, actions: cellActions(ctx) });
+    setMenu({ x: e.clientX, y: e.clientY, actions: cellActions(ctx, env) });
   };
 
-  const openRowMenu = (e: React.MouseEvent, ctx: Omit<CellCtx, "col" | "value">) => {
+  const openRowMenu = (e: React.MouseEvent, ctx: RowCtx) => {
     e.preventDefault();
     e.stopPropagation();
-    setMenu({ x: e.clientX, y: e.clientY, actions: rowActions(ctx) });
+    setMenu({ x: e.clientX, y: e.clientY, actions: rowActions(ctx, env) });
   };
 
   const pagedFlat: QueryResult = useMemo(
@@ -209,10 +244,7 @@ function TableView({
   result: QueryResult;
   rowOffset: number;
   onCellContextMenu: (e: React.MouseEvent, ctx: CellCtx) => void;
-  onRowContextMenu: (
-    e: React.MouseEvent,
-    ctx: Omit<CellCtx, "col" | "value">,
-  ) => void;
+  onRowContextMenu: (e: React.MouseEvent, ctx: RowCtx) => void;
 }) {
   return (
     <table className="result-table">
@@ -249,6 +281,7 @@ function TableView({
                   onContextMenu={(e) =>
                     onCellContextMenu(e, {
                       col: result.columns[j],
+                      colIndex: j,
                       value: cell,
                       rowIndex: abs,
                       row,
@@ -321,20 +354,45 @@ function rowAsJson(row: Cell[], columns: string[]): string {
   return JSON.stringify(rowToObject(row, columns), null, 2);
 }
 
-function rowAsInsert(row: Cell[], columns: string[], table = "«table»"): string {
+function rowAsInsert(row: Cell[], columns: string[], table: string): string {
   const cols = columns.map(quoteIdent).join(", ");
   const vals = row.map(sqlLiteral).join(", ");
   return `INSERT INTO ${table} (${cols}) VALUES (${vals});`;
 }
 
-function cellActions(ctx: CellCtx): MenuAction[] {
-  const { col, value, row, columns } = ctx;
-  // `= NULL` never matches in SQL: a null cell needs `IS NULL`.
-  const where =
-    value === null
-      ? `${quoteIdent(col)} IS NULL`
-      : `${quoteIdent(col)} = ${sqlLiteral(value)}`;
+/** Quoted target table name, or a placeholder to fill in by hand. */
+function tableOrPlaceholder(env: ActionEnv): string {
+  return env.target.ok ? quoteIdent(env.target.target.table) : "«table»";
+}
+
+/** A "→ new block" row action, disabled (with the reason) without a target. */
+function rowAction(
+  env: ActionEnv,
+  label: string,
+  build: (t: RowTarget) => { title: string; sql: string },
+  danger = false,
+): MenuAction {
+  if (!env.target.ok) return { label, danger, disabled: true, hint: env.target.reason };
+  const target = env.target.target;
+  return {
+    label,
+    danger,
+    onClick: () => {
+      const { title, sql } = build(target);
+      env.openSql(title, sql);
+    },
+  };
+}
+
+function cellActions(ctx: CellCtx, env: ActionEnv): MenuAction[] {
+  const { col, colIndex, value, row, columns } = ctx;
+  const where = sqlEquals(col, value);
   const text = value === null ? "" : String(value);
+  const table = tableOrPlaceholder(env);
+  const keyWhere = env.target.ok
+    ? rowKeyCondition(env.target.target, row, columns)
+    : "«pk» = «id»";
+  const isKey = env.target.ok && isKeyColumn(env.target.target, colIndex);
 
   return [
     { label: "Copy value", onClick: () => copy(text), disabled: value === null },
@@ -344,43 +402,60 @@ function cellActions(ctx: CellCtx): MenuAction[] {
     { label: "Copy WHERE clause", onClick: () => copy(where) },
     {
       label: "Copy SELECT filter",
-      onClick: () => copy(`SELECT * FROM «table» WHERE ${where};`),
+      onClick: () => copy(`SELECT * FROM ${table} WHERE ${where};`),
     },
     {
       label: "Copy UPDATE template",
       onClick: () =>
-        copy(
-          `UPDATE «table» SET ${quoteIdent(col)} = ${sqlLiteral(value)} WHERE «pk» = «id»;`,
-        ),
+        copy(`UPDATE ${table} SET ${quoteIdent(col)} = ${sqlLiteral(value)} WHERE ${keyWhere};`),
     },
     { separator: true },
-    {
-      label: "Copy row as JSON",
-      onClick: () => copy(rowAsJson(row, columns)),
-      disabled: row.length === 0,
-    },
-    {
-      label: "Copy row as INSERT",
-      onClick: () => copy(rowAsInsert(row, columns)),
-      disabled: row.length === 0,
-    },
+    { label: "Copy row as JSON", onClick: () => copy(rowAsJson(row, columns)) },
+    { label: "Copy row as INSERT", onClick: () => copy(rowAsInsert(row, columns, table)) },
     { separator: true },
-    { label: "Set NULL (in-place)", disabled: true },
-    { label: "Open in new block", disabled: true },
+    isKey || value === null
+      ? {
+          label: "Set NULL → new block",
+          disabled: true,
+          hint: isKey ? "A primary-key column can't be set to NULL." : "The value is already NULL.",
+        }
+      : rowAction(env, "Set NULL → new block", (t) => ({
+          title: `Set ${col} NULL — ${t.table}`,
+          sql: updateCellSql(t, row, columns, colIndex, null),
+        })),
+    rowAction(env, "Open row in new block", (t) => ({
+      title: `Row — ${t.table}`,
+      sql: selectRowSql(t, row, columns),
+    })),
   ];
 }
 
-function rowActions(ctx: Omit<CellCtx, "col" | "value">): MenuAction[] {
+function rowActions(ctx: RowCtx, env: ActionEnv): MenuAction[] {
   const { row, columns } = ctx;
   return [
     { label: "Copy row as JSON", onClick: () => copy(rowAsJson(row, columns)) },
-    { label: "Copy row as INSERT", onClick: () => copy(rowAsInsert(row, columns)) },
+    {
+      label: "Copy row as INSERT",
+      onClick: () => copy(rowAsInsert(row, columns, tableOrPlaceholder(env))),
+    },
     {
       label: "Copy row as TSV",
       onClick: () => copy(row.map((v) => (v === null ? "" : String(v))).join("\t")),
     },
     { separator: true },
-    { label: "Duplicate row (in-place)", disabled: true },
-    { label: "Delete row", disabled: true, danger: true },
+    rowAction(env, "Open row in new block", (t) => ({
+      title: `Row — ${t.table}`,
+      sql: selectRowSql(t, row, columns),
+    })),
+    rowAction(env, "Duplicate row → new block", (t) => ({
+      title: `Duplicate row — ${t.table}`,
+      sql: duplicateRowSql(t, row, columns),
+    })),
+    rowAction(
+      env,
+      "Delete row → new block",
+      (t) => ({ title: `Delete row — ${t.table}`, sql: deleteRowSql(t, row, columns) }),
+      true,
+    ),
   ];
 }

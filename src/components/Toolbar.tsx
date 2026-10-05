@@ -16,6 +16,8 @@ const BLOCK_TYPES: BlockType[] = [
 /** Top toolbar shown in the canvas view (see wireframe screens 02/03). */
 export function Toolbar() {
   const dbPath = useGraftStore((s) => s.dbPath);
+  const projectName = useGraftStore((s) => s.projectName);
+  const dirty = useGraftStore((s) => s.dirty);
   const nodeCount = useGraftStore((s) => s.nodes.length);
   const addBlock = useGraftStore((s) => s.addBlock);
   const addGroup = useGraftStore((s) => s.addGroup);
@@ -49,6 +51,13 @@ export function Toolbar() {
       <button className="toolbar__brand" onClick={goHome} title="Home">
         graft
       </button>
+      <span
+        className="toolbar__project"
+        title={dirty ? "Unsaved changes" : "All changes saved"}
+      >
+        {projectName}
+        {dirty && <span className="unsaved-dot" aria-label="unsaved changes" />}
+      </span>
       <span className="sep" />
 
       <button
@@ -90,8 +99,12 @@ export function Toolbar() {
       <button className="btn" onClick={() => void runAll()} disabled={nodeCount === 0}>
         ▶ Run all
       </button>
-      <button className="btn" onClick={() => void saveNotebook()}>
-        Save
+      <button
+        className="btn"
+        onClick={() => void saveNotebook()}
+        title={dirty ? "Save unsaved changes (⌘S / Ctrl+S)" : "Save (⌘S / Ctrl+S)"}
+      >
+        Save{dirty && " ●"}
       </button>
       <button
         className="btn"

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { pickDirectory, pickSqliteFile } from "../native";
 import { useGraftStore } from "../store/useGraftStore";
 import type { DbType } from "../types";
 
@@ -29,18 +29,13 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   const browse = async () => {
-    const dir = await openDialog({ directory: true, title: "Choose a location" });
-    if (typeof dir === "string") setLocation(dir);
+    const dir = await pickDirectory();
+    if (dir) setLocation(dir);
   };
 
   const browseDbFile = async () => {
-    const file = await openDialog({
-      multiple: false,
-      directory: false,
-      title: "Select SQLite database",
-      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
-    });
-    if (typeof file === "string") setDbFile(file);
+    const file = await pickSqliteFile();
+    if (file) setDbFile(file);
   };
 
   const safeName = name.trim();
@@ -50,8 +45,15 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
     if (!canCreate) return;
     setBusy(true);
     try {
-      await createProject(safeName, location, dbType, dbType === "sqlite" ? dbFile : null);
-      onClose();
+      const created = await createProject(
+        safeName,
+        location,
+        dbType,
+        dbType === "sqlite" ? dbFile : null,
+      );
+      // Not created = the user kept their unsaved changes: stay on the modal.
+      if (created) onClose();
+      else setBusy(false);
     } catch (e) {
       console.error("createProject:", e);
       alert(`Could not create project:\n${String(e)}`);

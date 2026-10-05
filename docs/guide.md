@@ -110,7 +110,22 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      Rename, Copy SQL, changement de vue, toggle bloc-lié, Delete).
    - **Clic droit sur une cellule ou une ligne** de résultat : copies
      (valeur, colonne, ligne en JSON/INSERT/TSV) et snippets SQL (clause
-     `WHERE`, `SELECT` filtré, template `UPDATE`).
+     `WHERE`, `SELECT` filtré, template `UPDATE`), plus des actions qui
+     **ouvrent le SQL dans un nouveau bloc**, à relire puis exécuter (rien
+     n'est modifié directement) :
+     - cellule : **Set NULL → new block** (`UPDATE … SET col = NULL WHERE <clé>`),
+       **Open row in new block** (`SELECT * … WHERE <clé>`) ;
+     - ligne : **Open row in new block**, **Duplicate row → new block**
+       (`INSERT` d'une copie ; une clé `INTEGER PRIMARY KEY` est laissée à la
+       base, une autre clé est recopiée et doit être modifiée),
+       **Delete row → new block** (`DELETE … WHERE <clé>`).
+
+     Elles ne s'activent que si le résultat correspond **sans ambiguïté à une
+     seule table** (toutes les colonnes en viennent) **et contient sa clé
+     primaire** — typiquement un `SELECT * FROM table`. Sinon elles sont grisées
+     et leur infobulle dit pourquoi (jointure, clé primaire non sélectionnée,
+     table sans clé primaire…). Dans ce cas les copies utilisent aussi le vrai
+     nom de table au lieu du placeholder `«table»`.
    - **Redimensionnement** : sélectionne un bloc, les poignées apparaissent
      sur les bords/coins ; taille persistée dans le fichier `.graft`.
 4. **Sidebar — explorateur de schéma** : les tables de la base connectée
@@ -135,8 +150,13 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
    chacune avec son propre canvas de blocs/groupes. **Clic** pour changer de
    page, **double-clic** pour renommer, **clic droit** pour supprimer, **+**
    pour en ajouter. Toutes les pages sont enregistrées dans le même `.graft`.
-9. **Save** → enregistre le projet (toutes les pages) dans un fichier `.graft`
-   (JSON). Le clic sur **graft** (en haut à gauche) revient à l'accueil.
+9. **Save** (ou **⌘S / Ctrl+S**) → enregistre le projet (toutes les pages)
+   dans son fichier `.graft` (JSON). Un **point orange** après le nom du projet
+   (et « Save ● ») signale des **modifications non sauvegardées** — SQL,
+   position/taille des blocs, pages, favoris… ; exécuter une requête n'en est
+   pas une. Ouvrir ou créer un autre projet, fermer la fenêtre ou quitter
+   l'app demande alors confirmation. Le clic sur **graft** (en haut à gauche)
+   revient à l'accueil sans fermer le projet : **↩ Back to <projet>** y ramène.
 10. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
    en bas à droite.
 

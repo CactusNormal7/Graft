@@ -10,7 +10,13 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
+import {
+  confirmDialog,
+  pickExportFile,
+  pickImportFile,
+  pickProjectFile,
+  setUnsavedChanges,
+} from "../native";
 import { insertIntoEditor } from "../canvas/editorRegistry";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
@@ -167,6 +173,10 @@ interface GraftState {
 
   recentProjects: RecentProject[];
 
+  /** True when the project differs from its last saved/opened state. Updated
+   *  shortly after each change (debounced); guards use `hasUnsavedChanges`. */
+  dirty: boolean;
+
   /** Whether the ⌘K / Ctrl+K command palette is shown. */
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
@@ -176,12 +186,15 @@ interface GraftState {
   onConnect: (connection: Connection) => void;
 
   goHome: () => void;
+  /** Return to the canvas of the project still loaded (from the home screen). */
+  resumeProject: () => void;
+  /** Resolves to false when the user chose to keep their unsaved changes. */
   createProject: (
     name: string,
     dir: string,
     dbType: DbType,
     dbPathOverride?: string | null,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   openProjectByPath: (projectPath: string) => Promise<void>;
   openProjectFromDialog: () => Promise<void>;
   removeRecent: (projectPath: string) => void;
@@ -210,6 +223,8 @@ interface GraftState {
   exportInserts: (blockId: string) => Promise<void>;
   /** Import a nested `.json` (→ multi-table INSERTs) or a `.sql` file. */
   importDataFile: () => Promise<void>;
+  /** Open generated SQL (row actions, …) in a new focused block for review. */
+  openSqlBlock: (title: string, sql: string, blockType: BlockType) => void;
 
   refreshSchema: () => Promise<void>;
   addBlock: (blockType: BlockType) => void;
@@ -308,10 +323,16 @@ function buildInsertScript(
   return { title: `INSERTs — ${base}`, sql: warningsHeader(warnings) + sql };
 }
 
-/** Staggered spot for the n-th node, so new blocks don't stack exactly on
- *  top of each other (4 columns, then wrap). */
+/** Gap kept between staggered blocks. */
+const BLOCK_GAP = 40;
+
+/** Grid spot for the n-th node (4 columns, then wrap), spaced by the default
+ *  block size so new blocks never overlap each other. */
 function staggeredPosition(index: number): { x: number; y: number } {
-  return { x: 80 + (index % 4) * 400, y: 80 + Math.floor(index / 4) * 280 };
+  return {
+    x: 80 + (index % 4) * (DEFAULT_BLOCK_WIDTH + BLOCK_GAP),
+    y: 80 + Math.floor(index / 4) * (DEFAULT_BLOCK_HEIGHT + BLOCK_GAP),
+  };
 }
 
 /** A fresh, idle SQL block at the default size. */
@@ -475,6 +496,42 @@ function serializeNotebook(state: GraftState): NotebookFile {
 
 const INITIAL_PAGE_ID = "page-initial";
 
+// --- Unsaved changes ---------------------------------------------------------
+// The project is "dirty" when what would be written to disk differs from what
+// was last saved or opened. Comparing serialized content (rather than flagging
+// every action) ignores everything the file doesn't store: run results,
+// execution status, selection, the viewport. The cached db schema is excluded
+// too — it mirrors the database, it isn't a user edit.
+
+/** Serialized project content as last saved/opened; null with no project. */
+let savedFingerprint: string | null = null;
+
+function fingerprint(state: GraftState): string {
+  return JSON.stringify({ ...serializeNotebook(state), dbSchema: undefined });
+}
+
+/** Exact (non-debounced) check, for guards that are about to discard state. */
+export function hasUnsavedChanges(state: GraftState): boolean {
+  return savedFingerprint !== null && fingerprint(state) !== savedFingerprint;
+}
+
+/** Record the current state as the saved baseline. */
+function markSaved(get: () => GraftState, set: (partial: Partial<GraftState>) => void) {
+  savedFingerprint = fingerprint(get());
+  set({ dirty: false });
+}
+
+/** If unsaved changes would be lost, ask the user. True means "go ahead". */
+async function confirmDiscard(state: GraftState): Promise<boolean> {
+  if (!hasUnsavedChanges(state)) return true;
+  const name = state.projectName ?? "The current project";
+  return confirmDialog(
+    "Unsaved changes",
+    `"${name}" has unsaved changes that will be lost.`,
+    "Discard changes",
+  );
+}
+
 export const useGraftStore = create<GraftState>((set, get) => ({
   view: "home",
   nodes: [],
@@ -490,6 +547,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   snippets: [],
   focusedBlockId: null,
   recentProjects: loadRecents(),
+  dirty: false,
   paletteOpen: false,
 
   setPaletteOpen: (open) => set({ paletteOpen: open }),
@@ -502,6 +560,10 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     set({ edges: addEdge(connection, get().edges) }),
 
   goHome: () => set({ view: "home" }),
+
+  resumeProject: () => {
+    if (get().projectPath) set({ view: "canvas" });
+  },
 
   addPage: () => {
     const pages = commitActivePage(get());
@@ -563,6 +625,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   createProject: async (name, dir, dbType, dbPathOverride) => {
+    if (!(await confirmDiscard(get()))) return false;
     const paths = await invoke<{ projectPath: string; dbPath: string }>(
       "create_project_paths",
       { dir, name },
@@ -602,15 +665,18 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       path: paths.projectPath,
       contents: JSON.stringify(serializeNotebook(get()), null, 2),
     });
+    markSaved(get, set);
     touchRecent(get, set, {
       name,
       projectPath: paths.projectPath,
       dbType,
       dbPath,
     });
+    return true;
   },
 
   openProjectByPath: async (projectPath) => {
+    if (!(await confirmDiscard(get()))) return;
     try {
       const contents = await invoke<string>("load_notebook", { path: projectPath });
       const file = JSON.parse(contents) as NotebookFile;
@@ -636,6 +702,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         snippets: file.snippets ?? [],
         focusedBlockId: null,
       });
+      markSaved(get, set);
       touchRecent(get, set, { name, projectPath, dbType, dbPath });
       void get().refreshSchema();
     } catch (err) {
@@ -647,13 +714,8 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   openProjectFromDialog: async () => {
-    const path = await openDialog({
-      multiple: false,
-      directory: false,
-      title: "Open project",
-      filters: [{ name: "Graft project", extensions: ["graft"] }],
-    });
-    if (typeof path === "string") await get().openProjectByPath(path);
+    const path = await pickProjectFile();
+    if (path) await get().openProjectByPath(path);
   },
 
   refreshSchema: async () => {
@@ -765,12 +827,8 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   exportInserts: async (blockId) => {
     const script = buildInsertScript(get(), blockId);
     if (!script) return;
-    const path = await saveDialog({
-      title: "Export INSERTs",
-      defaultPath: `${script.title}.sql`,
-      filters: [{ name: "SQL", extensions: ["sql"] }],
-    });
-    if (typeof path !== "string") return;
+    const path = await pickExportFile(`${script.title}.sql`);
+    if (!path) return;
     try {
       await invoke("write_text_file", { path, contents: script.sql });
     } catch (err) {
@@ -779,13 +837,8 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   importDataFile: async () => {
-    const path = await openDialog({
-      multiple: false,
-      directory: false,
-      title: "Import data",
-      filters: [{ name: "Data", extensions: ["json", "sql"] }],
-    });
-    if (typeof path !== "string") return;
+    const path = await pickImportFile();
+    if (!path) return;
 
     let contents: string;
     try {
@@ -814,6 +867,10 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       // .sql — load it as-is so the user can review and run it.
       spawnScriptBlock(get, set, name, contents);
     }
+  },
+
+  openSqlBlock: (title, sql, blockType) => {
+    spawnSqlBlock(get, set, { title, blockType, sql });
   },
 
   toggleCollapse: (id) => {
@@ -1033,6 +1090,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       alert(`Could not save the project:\n${projectPath}\n\n${String(err)}`);
       return;
     }
+    markSaved(get, set);
     touchRecent(get, set, {
       name: get().projectName ?? "untitled",
       projectPath,
@@ -1149,3 +1207,32 @@ function touchRecent(
   persistRecents(next);
   set({ recentProjects: next });
 }
+
+// Keep `dirty` (UI indicator) and the backend's close/quit guard in sync with
+// the project content. Debounced: a drag fires many changes per second, and
+// serializing on each one would be wasted work.
+const DIRTY_CHECK_DELAY_MS = 250;
+let dirtyCheck: ReturnType<typeof setTimeout> | null = null;
+
+useGraftStore.subscribe((state, prev) => {
+  const contentChanged =
+    state.nodes !== prev.nodes ||
+    state.edges !== prev.edges ||
+    state.pages !== prev.pages ||
+    state.snippets !== prev.snippets;
+  if (!contentChanged || savedFingerprint === null) return;
+  if (dirtyCheck) clearTimeout(dirtyCheck);
+  dirtyCheck = setTimeout(() => {
+    dirtyCheck = null;
+    const current = useGraftStore.getState();
+    const dirty = hasUnsavedChanges(current);
+    if (dirty !== current.dirty) useGraftStore.setState({ dirty });
+  }, DIRTY_CHECK_DELAY_MS);
+});
+
+useGraftStore.subscribe((state, prev) => {
+  if (state.dirty === prev.dirty) return;
+  setUnsavedChanges(state.dirty).catch((err) =>
+    console.error("set_unsaved_changes:", err),
+  );
+});
