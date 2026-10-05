@@ -107,8 +107,11 @@ Graft/
 │   ├── main.tsx              # bootstrap : fonts + tokens + CSS React Flow + thème
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
+│   ├── sqlFormat.ts          # quoteIdent / sqlLiteral (échappement SQL centralisé)
+│   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── store/
-│   │   └── useGraftStore.ts  # store Zustand (view, pages, nodes/edges de la page active, dbPath, actions)
+│   │   ├── useGraftStore.ts  # store Zustand (view, pages, nodes/edges de la page active, dbPath, palette, actions)
+│   │   └── snippets.ts       # favoris : expansion {{nom}} + normalisation des noms
 │   ├── styles/
 │   │   ├── app.css           # classes de la coquille + composants (issu du wireframe)
 │   │   └── tokens/           # design tokens (miroir du DS Claude Design)
@@ -121,6 +124,8 @@ Graft/
 │   ├── screens/
 │   │   └── HomeScreen.tsx    # écran d'accueil (connexions, quick connect, récents)
 │   ├── components/
+│   │   ├── NewProjectModal.tsx # modale de création de projet (nom, emplacement, moteur, fichier SQLite)
+│   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (favoris) — état `paletteOpen` dans le store
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
 │   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
 │   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter
@@ -129,9 +134,18 @@ Graft/
 │   └── canvas/
 │       ├── GraftCanvas.tsx   # <ReactFlow> + dot-grid + Controls/MiniMap + empty state + drag→groupe
 │       ├── SqlBlockNode.tsx  # nœud custom : header (titre éditable, dupliquer, supprimer, Run), éditeur, résultats
+│       ├── ResultBlockNode.tsx # bloc résultat lié (lecture seule) d'un bloc SQL
+│       ├── blockChrome.tsx   # UI partagée bloc SQL / bloc résultat : statut, icônes de vue, pied de résultat
+│       ├── BlockContextMenu.tsx # menu contextuel générique (portail vers <body>)
 │       ├── GroupNode.tsx     # nœud conteneur coloré (parent React Flow) : titre, couleur, resize
-│       ├── editorRegistry.ts # registre id→EditorView pour insérer depuis la sidebar
-│       └── ResultTable.tsx   # rendu d'un result set : vues table / json (arbre repliable) / chart + pagination client
+│       ├── editorRegistry.ts # registre id→EditorView pour insérer depuis la sidebar / la palette
+│       ├── useInnerScroll.ts # scroll molette interne au bloc sélectionné (pinch = zoom canvas)
+│       ├── ResultTable.tsx   # conteneur d'un result set : vue table, pagination client, menus cellule/ligne
+│       ├── JsonTreeView.tsx  # vue json : arbre repliable
+│       ├── ChartView.tsx     # vue chart : Recharts (bar/line/area/pie) + config
+│       ├── resultShape.ts    # détection parent→enfants d'un JOIN, rowToObject (colonnes dupliquées suffixées _2…)
+│       ├── orm.ts            # pont relationnel : résultat/JSON imbriqué → INSERT multi-tables
+│       └── clipboard.ts      # copie presse-papiers
 └── src-tauri/                # backend Rust (Tauri)
     ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
@@ -139,8 +153,8 @@ Graft/
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri + enregistrement des commandes
-        ├── db.rs             # moteur d'exécution SQLite (execute_sql)
-        └── notebook.rs       # save/load .graft + default_project_dir / create_project_paths
+        ├── db.rs             # moteur SQLite (execute_sql, introspect_schema) + tests
+        └── notebook.rs       # E/S fichiers (écriture atomique), default_project_dir / create_project_paths + tests
 ```
 
 ## Flux de données
@@ -149,11 +163,18 @@ Graft/
 1. L'utilisateur clique **▶ Run** sur un bloc → `runBlock(id)` dans le store.
 2. Le store passe le bloc en `running` et appelle la commande Tauri
    `invoke("execute_sql", { dbPath, sql, maxRows: MAX_FETCH_ROWS })`.
-3. Côté Rust (`db.rs`) : ouverture d'un `SqlitePool` sur `dbPath`
-   (`create_if_missing`), exécution d'**un** statement :
-   - statement qui renvoie des lignes (`select`/`with`/`pragma`/`explain`) →
-     `fetch_all`, puis **`take(max_rows)`** avant la conversion de chaque cellule
-     en `serde_json::Value` (sondage de types i64 → f64 → bool → String → blob) ;
+3. Côté Rust (`db.rs`) : ouverture d'**une** connexion `SqliteConnection` sur
+   `dbPath` (`SqliteConnectOptions::filename` + `create_if_missing` — pas de
+   parsing d'URL, donc les chemins Windows ou contenant `?`/`#` passent tels
+   quels ; pas de pool pour une unité de travail unique), puis :
+   - statement qui renvoie des lignes — détecté après avoir sauté les
+     **commentaires de tête** (`-- …`, `/* … */`) : `select`/`with`/`pragma`/
+     `explain`/`values`, ou tout statement contenant le mot-clé `RETURNING` →
+     lecture en **flux** (`fetch`) : seules les `max_rows` premières lignes sont
+     converties en `serde_json::Value` (sondage de types i64 → f64 → bool →
+     String → blob), les suivantes sont seulement **comptées** (jamais
+     matérialisées en mémoire). Un résultat vide garde ses **noms de colonnes**
+     (lus via `prepare` du statement) pour afficher les en-têtes ;
    - sinon (`INSERT`/`UPDATE`/DDL…) → `execute`, on renvoie `rows_affected`.
 4. Le résultat (`QueryResult { columns, rows, rows_affected, elapsed_ms,
    total_rows, truncated }`) revient au store, qui met le bloc en `success` (ou
@@ -164,13 +185,16 @@ Tauri sont le vrai coût d'un gros résultat (50 000 lignes × 19 colonnes ≈ 9
 valeurs). `execute_sql` ne convertit donc que les `max_rows` premières lignes
 (défaut **5000**, `MAX_FETCH_ROWS` côté store), tout en renvoyant le **vrai**
 total (`total_rows`) et un drapeau `truncated` affiché dans le pied du bloc
-(« 5000 / 50000 row(s) · tronqué »). L'UI pagine ensuite ces lignes (100/page).
+(« 5000 / 50000 row(s) · truncated »). L'UI pagine ensuite ces lignes (100/page).
 
 ### Projets (création / ouverture / sauvegarde)
 Un **projet** = un fichier `.graft` + une connexion (type + base). Cycle de vie :
 
-- **Créer** (`createProject(name, dir, dbType)`) : `create_project_paths` dérive
-  `<dir>/<name>.graft` et `<dir>/<name>.db` (join natif cross-platform) ; le store
+- **Créer** (`createProject(name, dir, dbType)`) : `create_project_paths` valide
+  le nom (non vide, ni `.`/`..`, ni séparateur de chemin ni caractère interdit
+  sous Windows), **refuse un `.graft` déjà existant** (sinon la première
+  sauvegarde l'écraserait), puis dérive `<dir>/<name>.graft` et `<dir>/<name>.db`
+  (join natif cross-platform) ; le store
   passe en `canvas` avec un canevas vide, puis **écrit immédiatement le `.graft`**
   (`save_notebook`) → le projet est persisté dès sa création. La modale propose un
   emplacement par défaut (`default_project_dir` = `<Documents|Home>/Graft`) et un
@@ -178,6 +202,9 @@ Un **projet** = un fichier `.graft` + une connexion (type + base). Cycle de vie 
 - **Sauvegarder** (`saveNotebook()`) : écrit dans le `projectPath` courant **sans
   dialogue** (le projet a toujours un chemin). L'état d'exécution transitoire
   (status/result/error) est remis à zéro avant écriture → fichiers diff-friendly.
+  L'écriture est **atomique** (fichier temporaire `<fichier>.tmp` puis `rename`) :
+  un crash ou un disque plein en cours d'écriture laisse l'ancienne version
+  intacte. Une erreur d'écriture est signalée à l'utilisateur.
 - **Ouvrir** : `openProjectByPath(path)` (clic sur un récent) ou
   `openProjectFromDialog()` (Open file…) lit le JSON via `load_notebook` et
   reconstruit `name`/`dbType`/`dbPath`/nodes/edges. Si le fichier est illisible,
@@ -197,7 +224,10 @@ clic, supprimable (✕).
   `keywordCompletionSource`) et raccourci **`Mod-Enter` (Ctrl/Cmd+Entrée)** pour
   exécuter le bloc focalisé (keymap en `Prec.highest`).
 - **Focus & registre** : chaque `SqlEditor` s'enregistre dans un module
-  `src/canvas/editorRegistry.ts` (map `id → EditorView`) et remonte son focus
+  `src/canvas/editorRegistry.ts` (map `id → EditorView`) via le callback
+  `onCreateEditor` de `@uiw/react-codemirror` — la vue est créée de façon
+  asynchrone (après un re-render), elle n'est donc pas encore disponible dans un
+  `useEffect` de montage — et remonte son focus
   au store (`focusedBlockId`). La sidebar utilise ce registre pour insérer un
   nom de **colonne** au curseur du bloc actif (double-clic colonne). Le
   **double-clic sur un nom de table** appelle plutôt `store.addSelectBlock(table)`
@@ -218,11 +248,13 @@ clic, supprimable (✕).
 |----------|-----------|------|
 | `execute_sql` | `(db_path: String, sql: String, max_rows: Option<usize>) -> Result<QueryResult, String>` | exécute un statement SQLite ; **plafonne** les lignes renvoyées (défaut 5000) |
 | `introspect_schema` | `(db_path: String) -> Result<Vec<TableInfo>, String>` | structure SQLite : tables/vues, colonnes (type, notnull, pk) et **clés étrangères** |
-| `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` |
+| `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` (atomique) |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
+| `write_text_file` | `(path: String, contents: String) -> Result<(), String>` | écrit un fichier texte (export `.sql`, atomique) |
+| `read_text_file` | `(path: String) -> Result<String, String>` | lit un fichier texte (import `.json`/`.sql`) |
 | `path_exists` | `(path: String) -> bool` | teste l'existence d'un fichier (purge des récents) |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
-| `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | dérive `.graft`/`.db` (join cross-platform) |
+| `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
 > Convention : `db_path`/`sql` côté Rust (snake_case) ↔ `dbPath`/`sql` côté JS
 > (Tauri convertit automatiquement le camelCase en snake_case).
@@ -307,21 +339,30 @@ favori **entre parenthèses** (donc utilisable en sous-requête), résout les
 références imbriquées, et laisse intactes les références inconnues ou cycliques
 (garde anti-boucle + profondeur max 10). L'expansion a lieu dans `runBlock`,
 juste avant l'appel à `execute_sql` — le SQL affiché dans l'éditeur reste celui
-écrit par l'utilisateur.
+écrit par l'utilisateur. Le nom d'un favori est normalisé à l'enregistrement
+(`toSnippetName` : tout caractère hors `[A-Za-z0-9_.-]` devient `_`) pour
+rester référençable — « Query 1 » aurait sinon été un favori impossible à
+appeler.
 
 **Pont relationnel (ORM) — `src/canvas/orm.ts`** — la vue JSON/imbriquée est
 traitée comme une **vraie source de données relationnelle**. Tout y est pur
 (pas de React/store/Tauri), donc testable isolément :
 
 - `matchTable(columns, schema)` — retrouve la table cible par recouvrement de
-  noms de colonnes (seuil 60 %), en **excluant les vues** (pas d'INSERT dessus).
+  noms de colonnes (seuil 60 %), en **excluant les vues** (pas d'INSERT dessus) ;
+  à score égal, la table la plus étroite gagne.
 - `findForeignKey(child, parent)` — la FK reliant les deux tables, lue depuis le
   schéma en cache (`dbSchema`).
 - `generateInserts(result, schema)` — si le résultat a une forme parent→enfants
   (`detectNestedShape`) **et** que les deux côtés correspondent à des tables
   réelles, sort des INSERT **relationnels** : un INSERT parent puis ses enfants,
-  avec la FK renseignée (valeur explicite de la PK si elle est sélectionnée,
-  sinon `last_insert_rowid()`). Sinon, repli sur des INSERT plats ligne à ligne,
+  avec la FK renseignée : valeur explicite de la colonne visée par la FK (ou de
+  la PK) si elle est sélectionnée, sinon la sous-requête
+  `(SELECT <clé> FROM <parent> ORDER BY rowid DESC LIMIT 1)`. On n'utilise
+  **pas** `last_insert_rowid()` : dès le premier INSERT enfant il désigne
+  l'enfant, et le 2ᵉ enfant aurait été rattaché au 1ᵉʳ. Une ligne sans colonne
+  mappable devient `INSERT … DEFAULT VALUES`. Sinon, repli sur des INSERT plats
+  ligne à ligne,
   avec un placeholder `«table»` si aucune table ne correspond.
 - `jsonToInserts(json, schema)` — l'inverse à l'import : les champs scalaires
   d'un objet deviennent une ligne, chaque tableau d'objets devient des lignes
@@ -349,15 +390,15 @@ Trois modes disponibles pour un bloc SQL (`normalizeResultView` mappe les
 anciennes valeurs `records`/`nested` vers `json`) :
 
 - **`table`** — feuille de calcul classique, avec numéros de ligne.
-- **`json`** — un **arbre JSON interactif** (`JsonTreeView` dans
-  `ResultTable.tsx`) : chaque objet/tableau est repliable (comme un éditeur
+- **`json`** — un **arbre JSON interactif** (`JsonTreeView.tsx`) : chaque
+  objet/tableau est repliable (comme un éditeur
   JSON), avec **▼ all / ▶ all** et un défaut d'ouverture par profondeur.
   Les données affichées sont **soit** le document relationnel ré-imbriqué quand
   `detectNestedShape` trouve une relation `JOIN` (objet parent + tableau
   d'enfants via `buildNestedGroups`/`groupToObject`), **soit** le tableau plat
   des objets ligne. Colorisé par type.
-- **`chart`** — trace le résultat via **Recharts** (`ChartView` dans
-  `ResultTable.tsx`) : type `bar`/`line`/`area`/`pie`, une colonne X, une ou
+- **`chart`** — trace le résultat via **Recharts** (`ChartView.tsx`) : type
+  `bar`/`line`/`area`/`pie`, une colonne X, une ou
   plusieurs séries Y (colonnes numériques détectées par `numericColumns()`).
   La config (`ChartConfig`) est persistée sur le bloc (`store.setChartConfig`).
   Les couleurs viennent des tokens `--chart-1..8` (palette catégorielle validée
@@ -382,7 +423,13 @@ sont déjà toutes dans le store). État local à `ResultTable` : `page` + `page
 (défaut **100**, réinitialisés quand le résultat / la vue / la taille change).
 `table` pagine les **lignes**, `json` les **éléments** de premier niveau (objets
 ré-imbriqués ou lignes plates). La barre (‹ / ›, plage, sélecteur 50 / 100 / 500 /
-Tout) n'apparaît qu'au-delà de 100. `chart` trace tout le résultat (pas de page).
+All) apparaît au-delà de 100 éléments, ou dès que la taille de page choisie
+découpe le résultat (sinon un 50/page choisi sur un gros résultat masquait des
+lignes d'un résultat suivant plus petit). `chart` trace tout le résultat (pas
+de page). Les noms de colonnes dupliqués (`SELECT a.id, b.id`) sont suffixés
+(`id`, `id_2`) dans les vues json/chart et les copies JSON au lieu de
+s'écraser ; dans le menu cellule, une valeur `NULL` produit `IS NULL` (et non
+`= NULL`, qui ne matche jamais).
 
 Structure du rendu : `.sql-block__result` (colonne flex, **sans** scroll) →
 `.result-view` → `.result-view__body` (**le** conteneur scrollable) puis
@@ -439,9 +486,81 @@ pnpm tauri dev      # lance l'app desktop (Vite + compile Rust + ouvre la fenêt
 pnpm tauri build    # build un binaire distribuable
 pnpm build          # type-check (tsc) + build frontend seul
 cargo check         # (dans src-tauri/) vérifie le backend Rust
+cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs
 ```
 
+> Sous Linux/WSL, `cargo check`/`cargo test` exigent les libs de dev GTK/WebKit
+> de Tauri (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`…). Le frontend n'a pas
+> encore de lanceur de tests (Vitest serait le choix naturel avec Vite) : les
+> modules purs `orm.ts`, `resultShape.ts`, `snippets.ts` sont les premiers
+> candidats.
+
 > Si `cargo` est introuvable dans une nouvelle session : `source "$HOME/.cargo/env"`.
+
+## Intégration Claude — MCP / connecteur personnalisé (à faire)
+
+**Besoin acté :** Graft devra s'intégrer à **Claude** pour que l'assistant puisse
+travailler *dans* un projet Graft — lire le schéma, lire/écrire des blocs,
+exécuter des requêtes, proposer des migrations — depuis Claude Desktop, Claude
+Code ou claude.ai. Le véhicule standard est le **Model Context Protocol (MCP)**.
+Rien n'est implémenté à ce stade ; cette section fixe la direction.
+
+**Deux formes, à phaser :**
+
+1. **Serveur MCP local (stdio) — première étape.** Un binaire `graft-mcp`
+   lancé par le client Claude (Claude Desktop / Claude Code le déclarent dans
+   leur config MCP). Il fonctionne **sans que l'app soit ouverte**, directement
+   sur les fichiers `.graft` et la base. Implémentation recommandée en **Rust**
+   (SDK MCP officiel `rmcp`) pour **réutiliser le moteur existant** : extraire
+   `db.rs` / `notebook.rs` (et à terme la sérialisation du `.graft`, aujourd'hui
+   côté TypeScript) dans un crate `graft-core` partagé par l'app Tauri et le
+   serveur MCP, dans un workspace Cargo. Distribution : sidecar Tauri livré avec
+   l'app (macOS + Windows), plus une commande « Installer dans Claude Desktop »
+   qui écrit l'entrée de config.
+2. **Connecteur personnalisé (MCP distant) — étape ultérieure.** Pour claude.ai
+   (web/mobile), un connecteur personnalisé pointe vers un serveur MCP joignable
+   en **HTTPS** (transport *Streamable HTTP*) avec **OAuth**. Graft étant une
+   app desktop locale, cela suppose un relais/tunnel ou une brique cloud
+   (synchro de projets) — à n'envisager que si une telle brique existe.
+
+**Surface MCP envisagée :**
+- *Tools* : `list_projects`, `get_schema(project)`, `list_blocks(project, page?)`,
+  `read_block`, `create_block` / `update_block` (SQL, titre, type, position),
+  `run_query(project, sql)`, `run_block(project, block_id)`,
+  `generate_inserts(project, block_id)`, `explain_query`.
+- *Resources* : schéma introspecté (`graft://<projet>/schema`), SQL de chaque
+  bloc, favoris `{{nom}}` (qu'il faut **expanser** comme le fait `runBlock`
+  avant toute exécution).
+- *Prompts* : « écrire une migration pour… », « expliquer ce plan
+  d'exécution », « documenter ce schéma ».
+
+**Synchronisation avec l'app ouverte.** Si le serveur MCP modifie un `.graft`
+pendant que l'app l'affiche, les deux versions divergent (aujourd'hui la
+sauvegarde de l'app écraserait les changements de Claude). Étapes :
+(a) l'app **surveille** le fichier ouvert et propose de recharger / fusionne ;
+(b) plus tard, un **pont local** (socket localhost authentifié par jeton, exposé
+par l'app Tauri) auquel le serveur MCP parle quand l'app est ouverte, pour que
+les blocs créés par Claude apparaissent **en direct** sur le canvas.
+
+**Garde-fous (non négociables pour une audience DBA) :**
+- `run_query` **en lecture seule par défaut** (connexion SQLite ouverte en
+  `read_only`, transaction en lecture seule côté Postgres/MySQL) ; écritures
+  (DML/DDL) uniquement via un tool distinct, opt-in par projet, avec
+  confirmation côté client.
+- Plafond de lignes réutilisé (`max_rows`) pour ne pas saturer le contexte.
+- Accès fichiers limité aux projets connus (liste des récents / dossier projet) —
+  pas de lecture/écriture de chemins arbitraires.
+- Jamais d'identifiants (mots de passe Postgres/MySQL) dans les réponses ; les
+  secrets vivent dans le trousseau de l'OS.
+
+**Phasage proposé :** extraction de `graft-core` → serveur MCP stdio
+(SQLite, lecture seule + édition de blocs) → surveillance de fichier dans l'app
+→ écritures opt-in → support Postgres/MySQL (v0.3) → pont live → connecteur
+distant si une brique cloud voit le jour.
+
+> Distinct de l'autre direction possible — **Claude dans Graft** (panneau
+> assistant appelant l'API Claude depuis l'app) — qui peut venir en complément
+> mais ne remplace pas l'intégration MCP.
 
 ## GraphQL — analyse (à l'étude, non tranché)
 
@@ -488,3 +607,10 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   choisi pour une API unifiée.
 - Les arêtes entre blocs sont dessinables mais n'ont pas encore de sémantique
   d'exécution (ordre/dépendances) — à définir avec la granularité des blocs.
+- **Sécurité webview** : `tauri.conf.json` a `csp: null` et les commandes
+  `read_text_file`/`write_text_file` acceptent n'importe quel chemin. Acceptable
+  pour un POC local sans contenu distant, mais à durcir avant distribution
+  (CSP stricte, chemins limités à ceux choisis via les dialogues natifs) —
+  d'autant plus avant l'intégration MCP.
+- **Pas d'indicateur « modifié non sauvegardé »** : ouvrir un autre projet
+  abandonne silencieusement les changements non sauvegardés de l'actuel.

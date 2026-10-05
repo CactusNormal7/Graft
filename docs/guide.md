@@ -47,7 +47,11 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
     **existant** (ex. `data/sample.db`), ou laisse vide pour créer un nouveau
     `<nom>.db` à côté du projet.
   À la validation, le projet est **créé et sauvegardé immédiatement**
-  (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas.
+  (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas. Si un projet du
+  même nom existe déjà à cet emplacement, la création est **refusée** (il n'est
+  jamais écrasé) : ouvre-le ou choisis un autre nom. Le nom ne peut pas contenir
+  de séparateur de chemin ni les caractères interdits par Windows
+  (`: * ? " < > |`).
 - **Projets récents** → liste persistée ; clique pour **rouvrir**, ✕ pour retirer
   de la liste.
 - **Open file…** → ouvre un `.graft` existant où qu'il soit.
@@ -92,7 +96,8 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      Clic droit sur le bouton (ou sur le bloc) pour choisir directement la vue.
    - **Pagination** : au-delà de **100 lignes** (ou 100 groupes en vue nested),
      une barre de pagination apparaît en pied de résultat (‹ / ›, plage
-     affichée, sélecteur **50 / 100 / 500 / Tout**). Purement côté client.
+     affichée, sélecteur **50 / 100 / 500 / All**). Purement côté client. La
+     barre reste visible dès que la taille de page choisie découpe le résultat.
    - **⇥** route le résultat vers un **bloc lié** (créé à droite au premier
      Run, connecté par une arête). Utile quand le résultat prend beaucoup
      de place ou qu'on veut le comparer à côté.
@@ -138,7 +143,9 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 ### Blocs favoris & sous-requêtes (`{{nom}}`)
 - **Enregistrer un favori** : clic droit sur un bloc → **« Save as favorite… »**,
   puis choisis un nom. Les favoris sont listés dans la sidebar et enregistrés
-  dans le `.graft`.
+  dans le `.graft`. Le nom est normalisé pour être référençable : seuls lettres,
+  chiffres, `_`, `.` et `-` sont gardés, le reste devient `_` (« Query 1 » →
+  `Query_1`).
 - **Réutiliser un favori dans une requête** : écris `{{nom}}` là où tu veux une
   sous-requête. À l'exécution, la référence est remplacée par le SQL du favori
   **entre parenthèses** :
@@ -162,7 +169,8 @@ Une requête avec jointures donne une vue imbriquée (`{}`) — et cette vue est
   - **Generate INSERTs → new block** — crée un bloc `script` contenant les
     INSERT. Si la relation est détectée, ce sont des INSERT **multi-tables** :
     un INSERT parent suivi de ses enfants, la clé étrangère étant renseignée
-    automatiquement (valeur de la PK si présente, sinon `last_insert_rowid()`).
+    automatiquement (valeur de la clé si elle est sélectionnée, sinon une
+    sous-requête qui relit la clé de la dernière ligne parent insérée).
   - **Copy INSERTs** — la même chose dans le presse-papiers.
   - **Export INSERTs (.sql)…** — écrit un fichier `.sql`.
 - **Import…** (toolbar) :

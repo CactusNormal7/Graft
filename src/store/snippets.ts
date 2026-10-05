@@ -3,6 +3,15 @@ import type { Snippet } from "../types";
 /** Matches a `{{ name }}` favorite-block reference. */
 const SNIPPET_REF = /\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g;
 
+/** Characters a favorite name may NOT contain (complement of SNIPPET_REF's). */
+const INVALID_NAME_CHARS = /[^A-Za-z0-9_.-]+/g;
+
+/** Turn a free-form label ("Recent users 2") into a name `{{…}}` can reference
+ *  ("Recent_users_2"). Returns "" when nothing usable remains. */
+export function toSnippetName(label: string): string {
+  return label.trim().replace(INVALID_NAME_CHARS, "_").replace(/^_+|_+$/g, "");
+}
+
 /**
  * Replace `{{name}}` references with the referenced favorite's SQL, wrapped in
  * parentheses so it drops straight into a subquery position:

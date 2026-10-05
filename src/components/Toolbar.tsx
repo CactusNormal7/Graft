@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useReactFlow, useStore } from "@xyflow/react";
 import { useGraftStore } from "../store/useGraftStore";
+import { basename } from "../paths";
 import type { BlockType } from "../types";
 
 const BLOCK_TYPES: BlockType[] = [
@@ -22,6 +23,7 @@ export function Toolbar() {
   const saveNotebook = useGraftStore((s) => s.saveNotebook);
   const importDataFile = useGraftStore((s) => s.importDataFile);
   const goHome = useGraftStore((s) => s.goHome);
+  const setPaletteOpen = useGraftStore((s) => s.setPaletteOpen);
 
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const zoom = useStore((s) => s.transform[2]);
@@ -40,7 +42,7 @@ export function Toolbar() {
     return () => document.removeEventListener("mousedown", onClick);
   }, [menuOpen]);
 
-  const dbLabel = dbPath ? dbPath.split("/").pop() : "No database";
+  const dbLabel = dbPath ? basename(dbPath) : "No database";
 
   return (
     <div className="toolbar">
@@ -85,10 +87,10 @@ export function Toolbar() {
         + Group
       </button>
 
-      <button className="btn" onClick={runAll} disabled={nodeCount === 0}>
+      <button className="btn" onClick={() => void runAll()} disabled={nodeCount === 0}>
         ▶ Run all
       </button>
-      <button className="btn" onClick={saveNotebook}>
+      <button className="btn" onClick={() => void saveNotebook()}>
         Save
       </button>
       <button
@@ -101,11 +103,7 @@ export function Toolbar() {
       <button
         className="btn"
         title="Command palette — search favorite blocks (⌘K / Ctrl+K)"
-        onClick={() =>
-          window.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "k", metaKey: true }),
-          )
-        }
+        onClick={() => setPaletteOpen(true)}
       >
         ⌘K
       </button>

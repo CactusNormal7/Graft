@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
-import { useGraftStore } from "../store/useGraftStore";
+import { useGraftStore, type SqlNode } from "../store/useGraftStore";
 import { insertIntoEditor } from "../canvas/editorRegistry";
 import type { BlockType } from "../types";
 
 const BADGE_LETTER: Record<BlockType, string> = {
   query: "q",
   migration: "m",
-  procedure: "s",
+  procedure: "p",
   trigger: "t",
   view: "v",
   script: "s",
@@ -14,9 +14,9 @@ const BADGE_LETTER: Record<BlockType, string> = {
 
 /**
  * Canvas sidebar: live schema explorer (tables introspected from the DB, with
- * expandable columns and a search filter) + block list. Clicking a table or
- * column inserts its name into the currently-focused block editor — the
- * classic "quick fill" ergonomics of a SQL IDE.
+ * expandable columns and a search filter) + favorites + block list.
+ * Double-clicking a column inserts `table.column` into the focused block
+ * editor; double-clicking a table name opens a `SELECT *` block on it.
  */
 export function Sidebar() {
   // Subscribe to the raw nodes array (stable reference), then derive the
@@ -27,8 +27,7 @@ export function Sidebar() {
   const nodes = useMemo(
     () =>
       allNodes.filter(
-        (n): n is import("../store/useGraftStore").SqlNode =>
-          n.type === "sqlBlock",
+        (n): n is SqlNode => n.type === "sqlBlock",
       ),
     [allNodes],
   );

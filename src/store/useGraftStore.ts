@@ -12,7 +12,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { insertIntoEditor } from "../canvas/editorRegistry";
-import { expandSnippets } from "./snippets";
+import { expandSnippets, toSnippetName } from "./snippets";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
 import { quoteIdent } from "../sqlFormat";
 import type {
@@ -77,8 +77,9 @@ const DEFAULT_RESULT_HEIGHT = 360;
 const DEFAULT_GROUP_WIDTH = 480;
 const DEFAULT_GROUP_HEIGHT = 340;
 
-/** Container color palette offered on group creation (cycled). */
-const GROUP_COLORS = [
+/** Container color palette offered on group creation (cycled) and in the
+ *  group's color picker. */
+export const GROUP_COLORS = [
   "#6ea8fe", // blue
   "#4ade80", // green
   "#fbbf74", // amber
@@ -96,8 +97,7 @@ const nextPageId = () => `page-${Date.now()}-${pageSeq++}`;
 
 /** Max rows pulled back from the backend per run. The UI paginates, so fetching
  *  (and IPC-serializing) an entire huge result set is wasted work. */
-export const MAX_FETCH_ROWS = 5000;
-
+const MAX_FETCH_ROWS = 5000;
 
 const DEFAULT_SQL: Record<BlockType, string> = {
   query: "SELECT 1 AS hello;",
@@ -166,6 +166,10 @@ interface GraftState {
   focusedBlockId: string | null;
 
   recentProjects: RecentProject[];
+
+  /** Whether the ⌘K / Ctrl+K command palette is shown. */
+  paletteOpen: boolean;
+  setPaletteOpen: (open: boolean) => void;
 
   onNodesChange: (changes: NodeChange<AnyNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
@@ -241,6 +245,7 @@ interface GraftState {
   runBlock: (id: string) => Promise<void>;
   runAll: () => Promise<void>;
 
+  /** Write the project to its `.graft` file; reports failures to the user. */
   saveNotebook: () => Promise<void>;
 }
 
@@ -303,25 +308,25 @@ function buildInsertScript(
   return { title: `INSERTs — ${base}`, sql: warningsHeader(warnings) + sql };
 }
 
-/** Drop a generated SQL script onto the canvas as a new `script` block. */
-function spawnScriptBlock(
-  get: () => GraftState,
-  set: (partial: Partial<GraftState>) => void,
-  title: string,
-  sql: string,
-) {
-  const count = get().nodes.length;
-  const id = nextId();
-  const node: SqlNode = {
-    id,
+/** Staggered spot for the n-th node, so new blocks don't stack exactly on
+ *  top of each other (4 columns, then wrap). */
+function staggeredPosition(index: number): { x: number; y: number } {
+  return { x: 80 + (index % 4) * 400, y: 80 + Math.floor(index / 4) * 280 };
+}
+
+/** A fresh, idle SQL block at the default size. */
+function newSqlNode(
+  position: { x: number; y: number },
+  fields: Pick<SqlBlockData, "title" | "blockType" | "sql">,
+): SqlNode {
+  return {
+    id: nextId(),
     type: "sqlBlock",
-    position: { x: 80 + (count % 4) * 400, y: 80 + Math.floor(count / 4) * 280 },
+    position,
     width: DEFAULT_BLOCK_WIDTH,
     height: DEFAULT_BLOCK_HEIGHT,
     data: {
-      title,
-      blockType: "script",
-      sql,
+      ...fields,
       status: "idle",
       result: null,
       error: null,
@@ -329,7 +334,29 @@ function spawnScriptBlock(
       height: DEFAULT_BLOCK_HEIGHT,
     },
   };
-  set({ nodes: [...get().nodes, node], focusedBlockId: id });
+}
+
+/** Append a new SQL block at the next staggered position and focus it.
+ *  Returns the new block's id. */
+function spawnSqlBlock(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  fields: Pick<SqlBlockData, "title" | "blockType" | "sql">,
+): string {
+  const nodes = get().nodes;
+  const node = newSqlNode(staggeredPosition(nodes.length), fields);
+  set({ nodes: [...nodes, node], focusedBlockId: node.id });
+  return node.id;
+}
+
+/** Drop a generated SQL script onto the canvas as a new `script` block. */
+function spawnScriptBlock(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  title: string,
+  sql: string,
+) {
+  spawnSqlBlock(get, set, { title, blockType: "script", sql });
 }
 
 /** Sync the working copy (top-level nodes/edges) back into the active page. */
@@ -425,7 +452,8 @@ function pagesFromFile(file: NotebookFile): Page[] {
   ];
 }
 
-/** Build the on-disk notebook shape (v4, paged) from the current state. */
+/** Build the on-disk notebook shape (v5: paged + schema/snippets) from the
+ *  current state. */
 function serializeNotebook(state: GraftState): NotebookFile {
   const pages = commitActivePage(state);
   return {
@@ -462,6 +490,9 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   snippets: [],
   focusedBlockId: null,
   recentProjects: loadRecents(),
+  paletteOpen: false,
+
+  setPaletteOpen: (open) => set({ paletteOpen: open }),
 
   onNodesChange: (changes) =>
     set({ nodes: applyNodeChanges(changes, get().nodes) }),
@@ -559,6 +590,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       dbSchema: [],
       schema: {},
       snippets: [],
+      focusedBlockId: null,
     });
 
     // Introspect first so the very first save already carries the schema
@@ -584,12 +616,15 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       const file = JSON.parse(contents) as NotebookFile;
       const pages = pagesFromFile(file);
       const active = pages[0];
+      const name = file.name ?? "untitled";
+      const dbType = file.dbType ?? "sqlite";
+      const dbPath = file.dbPath ?? null;
       set({
         view: "canvas",
-        projectName: file.name ?? "untitled",
+        projectName: name,
         projectPath,
-        dbType: file.dbType ?? "sqlite",
-        dbPath: file.dbPath,
+        dbType,
+        dbPath,
         pages,
         activePageId: active.id,
         nodes: active.nodes,
@@ -599,13 +634,9 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         dbSchema: file.dbSchema ?? [],
         schema: flattenSchema(file.dbSchema ?? []),
         snippets: file.snippets ?? [],
+        focusedBlockId: null,
       });
-      touchRecent(get, set, {
-        name: file.name ?? "untitled",
-        projectPath,
-        dbType: file.dbType ?? "sqlite",
-        dbPath: file.dbPath,
-      });
+      touchRecent(get, set, { name, projectPath, dbType, dbPath });
       void get().refreshSchema();
     } catch (err) {
       console.error("Failed to open project:", err);
@@ -640,50 +671,22 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   addBlock: (blockType) => {
-    const sqlCount = get().nodes.filter(isSqlNode).length;
-    const count = get().nodes.length;
-    const node: SqlNode = {
-      id: nextId(),
-      type: "sqlBlock",
-      // Stagger new blocks so they don't stack exactly on top of each other.
-      position: { x: 80 + (count % 4) * 400, y: 80 + Math.floor(count / 4) * 280 },
-      width: DEFAULT_BLOCK_WIDTH,
-      height: DEFAULT_BLOCK_HEIGHT,
-      data: {
-        title: `${blockType[0].toUpperCase()}${blockType.slice(1)} ${sqlCount + 1}`,
-        blockType,
-        sql: DEFAULT_SQL[blockType],
-        status: "idle",
-        result: null,
-        error: null,
-        width: DEFAULT_BLOCK_WIDTH,
-        height: DEFAULT_BLOCK_HEIGHT,
-      },
-    };
-    set({ nodes: [...get().nodes, node] });
+    const nodes = get().nodes;
+    const sqlCount = nodes.filter(isSqlNode).length;
+    const node = newSqlNode(staggeredPosition(nodes.length), {
+      title: `${blockType[0].toUpperCase()}${blockType.slice(1)} ${sqlCount + 1}`,
+      blockType,
+      sql: DEFAULT_SQL[blockType],
+    });
+    set({ nodes: [...nodes, node] });
   },
 
   addSelectBlock: (table) => {
-    const count = get().nodes.length;
-    const id = nextId();
-    const node: SqlNode = {
-      id,
-      type: "sqlBlock",
-      position: { x: 80 + (count % 4) * 400, y: 80 + Math.floor(count / 4) * 280 },
-      width: DEFAULT_BLOCK_WIDTH,
-      height: DEFAULT_BLOCK_HEIGHT,
-      data: {
-        title: `Select ${table}`,
-        blockType: "query",
-        sql: `SELECT * FROM ${quoteIdent(table)} LIMIT 100;`,
-        status: "idle",
-        result: null,
-        error: null,
-        width: DEFAULT_BLOCK_WIDTH,
-        height: DEFAULT_BLOCK_HEIGHT,
-      },
-    };
-    set({ nodes: [...get().nodes, node], focusedBlockId: id });
+    const id = spawnSqlBlock(get, set, {
+      title: `Select ${table}`,
+      blockType: "query",
+      sql: `SELECT * FROM ${quoteIdent(table)} LIMIT 100;`,
+    });
     // Auto-run so double-clicking a table immediately shows its rows.
     void get().runBlock(id);
   },
@@ -842,7 +845,9 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   saveBlockAsSnippet: (blockId, name) => {
-    const trimmed = name.trim();
+    // Normalize to the `{{name}}` charset — "Query 1" would otherwise be saved
+    // under a name no reference can ever match.
+    const trimmed = toSnippetName(name);
     if (!trimmed) return;
     const node = get().nodes.find((n) => n.id === blockId);
     if (!node || !isSqlNode(node)) return;
@@ -870,26 +875,11 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   addBlockFromSnippet: (id) => {
     const snippet = get().snippets.find((s) => s.id === id);
     if (!snippet) return;
-    const count = get().nodes.length;
-    const newId = nextId();
-    const node: SqlNode = {
-      id: newId,
-      type: "sqlBlock",
-      position: { x: 80 + (count % 4) * 400, y: 80 + Math.floor(count / 4) * 280 },
-      width: DEFAULT_BLOCK_WIDTH,
-      height: DEFAULT_BLOCK_HEIGHT,
-      data: {
-        title: snippet.name,
-        blockType: snippet.blockType,
-        sql: snippet.sql,
-        status: "idle",
-        result: null,
-        error: null,
-        width: DEFAULT_BLOCK_WIDTH,
-        height: DEFAULT_BLOCK_HEIGHT,
-      },
-    };
-    set({ nodes: [...get().nodes, node], focusedBlockId: newId });
+    spawnSqlBlock(get, set, {
+      title: snippet.name,
+      blockType: snippet.blockType,
+      sql: snippet.sql,
+    });
   },
 
   updateSql: (id, sql) =>
@@ -908,9 +898,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     const nodes = get().nodes;
     const src = nodes.find((n) => n.id === id);
     if (!src || !isSqlNode(src)) return;
-    set({
-      nodes: patchNode(nodes, id, { emitToBlock: enabled }),
-    });
+    set({ nodes: patchNode(nodes, id, { emitToBlock: enabled }) });
   },
 
   resizeBlock: (id, width, height) => {
@@ -1036,10 +1024,15 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   saveNotebook: async () => {
     const { projectPath } = get();
     if (!projectPath) return; // projects always have a path once created
-    await invoke("save_notebook", {
-      path: projectPath,
-      contents: JSON.stringify(serializeNotebook(get()), null, 2),
-    });
+    try {
+      await invoke("save_notebook", {
+        path: projectPath,
+        contents: JSON.stringify(serializeNotebook(get()), null, 2),
+      });
+    } catch (err) {
+      alert(`Could not save the project:\n${projectPath}\n\n${String(err)}`);
+      return;
+    }
     touchRecent(get, set, {
       name: get().projectName ?? "untitled",
       projectPath,
