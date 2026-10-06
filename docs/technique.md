@@ -150,18 +150,40 @@ Graft/
 │       ├── orm.ts            # pont relationnel : résultat/JSON imbriqué → INSERT multi-tables
 │       ├── rowSql.ts         # SQL des actions par ligne (UPDATE / DELETE / dupliquer / ouvrir) sur table résolue
 │       └── clipboard.ts      # copie presse-papiers
-└── src-tauri/                # backend Rust (Tauri)
-    ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
+├── Cargo.toml                # workspace Cargo (src-tauri + crates/*), deps partagées
+├── Cargo.lock                # lockfile du workspace
+├── .mcp.json                 # déclare le serveur MCP `graft` pour Claude Code (dev : cargo run)
+├── .graphifyignore           # exclusions du graphe de connaissance graphify
+├── crates/
+│   ├── graft-core/           # moteur partagé app + MCP, sans dépendance Tauri
+│   │   └── src/
+│   │       ├── db.rs         # SQLite : execute_sql, introspect_schema, OpenOptions { read_only } + tests
+│   │       ├── files.rs      # E/S fichiers (atomique, .graft only / chemins accordés), chemins projet + tests
+│   │       ├── scope.rs      # FileScope : chemins accordés pour la session + tests
+│   │       ├── notebook.rs   # modèle typé du .graft (lecture v1–v5, round-trip sans perte) + tests
+│   │       └── snippets.rs   # expand_snippets / to_snippet_name (port Rust de src/store/snippets.ts) + tests
+│   └── graft-mcp/            # serveur MCP stdio `graft-mcp` (lecture seule)
+│       └── src/
+│           ├── main.rs       # args (--root), GRAFT_PROJECT_DIRS, transport stdio
+│           ├── projects.rs   # découverte des .graft sous les racines + résolution nom/chemin + tests
+│           └── server.rs     # tools + resources MCP (rmcp) + tests
+└── src-tauri/                # backend Rust (Tauri) — fines enveloppes autour de graft-core
+    ├── Cargo.toml            # deps Rust (tauri, plugins, graft-core)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
     ├── capabilities/default.json  # permissions du webview : `core:default` uniquement
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
-        ├── db.rs             # moteur SQLite (execute_sql, introspect_schema) + tests
-        ├── notebook.rs       # E/S fichiers (atomique, .graft only / chemins accordés), projets + tests
-        ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
+        ├── db.rs             # commandes execute_sql / introspect_schema → graft_core::db
+        ├── notebook.rs       # commandes fichiers/projets → graft_core::files
         └── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
 ```
+
+> **Workspace Cargo.** Le moteur (`db`, `files`, `scope`) a été extrait de
+> `src-tauri` dans `crates/graft-core` pour être partagé avec le serveur MCP.
+> Les commandes Tauri gardent exactement les mêmes signatures IPC (aucun
+> changement côté frontend). Le dossier de build est désormais `target/` à la
+> racine (plus `src-tauri/target/`).
 
 ## Flux de données
 
@@ -576,11 +598,27 @@ pnpm install        # deps frontend
 pnpm tauri dev      # lance l'app desktop (Vite + compile Rust + ouvre la fenêtre)
 pnpm tauri build    # build un binaire distribuable
 pnpm build          # type-check (tsc) + build frontend seul
-cargo check         # (dans src-tauri/) vérifie le backend Rust
+cargo check --workspace   # vérifie tout le Rust (app, graft-core, graft-mcp)
 pnpm test           # tests frontend (Vitest, une passe)
 pnpm test:watch     # Vitest en mode watch
-cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs / scope.rs
+cargo test --workspace    # tests unitaires Rust (graft-core, graft-mcp, app)
+cargo build -p graft-mcp  # compile le serveur MCP (target/debug/graft-mcp)
 ```
+
+**Graphe de connaissance (graphify)** — le dépôt est indexé par
+[graphify](https://github.com/safishamsi/graphify) : `graphify-out/` (graphe
+`graph.json`, `GRAPH_REPORT.md`, `graph.html`) est **local et gitignoré**.
+Installation : `python3 -m pip install graphifyy` (ajouter
+`--break-system-packages` avec le Python Homebrew), puis `/graphify .` dans
+Claude Code pour la première construction. Les hooks git `post-commit` /
+`post-checkout` (`graphify hook install`) reconstruisent la partie code
+(AST, sans LLM) à chaque commit ; `graphify update .` le fait à la main. Les
+exclusions sont dans `.graphifyignore` (icônes, `gen/`, `.claude/`, `.vscode/`).
+La section `## graphify` de `CLAUDE.md` demande à Claude de consulter le graphe
+(`graphify query/path/explain`) avant d'explorer le code. `graphify claude
+install` crée aussi `.claude/settings.json` (hooks `PreToolUse` qui rappellent
+le graphe) avec un chemin absolu vers le binaire : fichier **non versionné**,
+propre à chaque machine.
 
 **Tests frontend (Vitest)** — fichiers `*.test.ts` à côté du code testé,
 environnement `node`, config reprise de `vite.config.ts`. Couvrent les modules
@@ -594,13 +632,50 @@ remplacés par des faux via `vi.mock`). Fixtures de schéma : `src/test/schema.t
 
 > Si `cargo` est introuvable dans une nouvelle session : `source "$HOME/.cargo/env"`.
 
-## Intégration Claude — MCP / connecteur personnalisé (à faire)
+## Intégration Claude — MCP / connecteur personnalisé (en cours)
 
 **Besoin acté :** Graft devra s'intégrer à **Claude** pour que l'assistant puisse
 travailler *dans* un projet Graft — lire le schéma, lire/écrire des blocs,
 exécuter des requêtes, proposer des migrations — depuis Claude Desktop, Claude
 Code ou claude.ai. Le véhicule standard est le **Model Context Protocol (MCP)**.
-Rien n'est implémenté à ce stade ; cette section fixe la direction.
+
+### Livré : `graft-mcp` (stdio, lecture seule, SQLite)
+
+Binaire `crates/graft-mcp`, SDK officiel **`rmcp`** (transport stdio), bâti sur
+`graft-core`. Fonctionne **sans l'app ouverte**, directement sur les fichiers.
+
+- **Découverte des projets** : seuls les `.graft` trouvés sous les **racines**
+  configurées sont accessibles (profondeur 4, dossiers cachés,
+  `node_modules`/`target`/`dist` ignorés) : `<Documents|Home>/Graft` (dossier par
+  défaut de l'app) + chaque `--root <dir>` + la variable `GRAFT_PROJECT_DIRS`
+  (liste de chemins, séparateur de l'OS). Un projet se désigne par son **nom**
+  ou le **chemin** de son `.graft` ; un chemin hors racines est refusé, un nom
+  partagé par plusieurs projets est déclaré ambigu.
+- **Lecture du `.graft`** : `graft_core::notebook` lit toutes les versions
+  (v1–v3 à plat → une page « Page 1 », comme `pagesFromFile`) et conserve les
+  champs inconnus (`extra`) — l'app reste la seule à **écrire** le format.
+- **Tools** : `list_projects`, `get_schema(project)` (introspection live, repli
+  sur `dbSchema` en cache), `list_blocks(project, page?)`,
+  `read_block(project, block_id)`, `run_query(project, sql, max_rows?)`,
+  `run_block(project, block_id, max_rows?)`. Les résultats sont du JSON
+  (`QueryResult`) ; une erreur revient en résultat d'outil `isError`.
+- **Resources** : `graft://<projet>/schema` et `graft://<projet>/blocks/<id>`
+  (SQL du bloc).
+- **Favoris** : `run_query`/`run_block` expansent `{{nom}}` avec
+  `graft_core::snippets::expand_snippets` (port 1:1 de `src/store/snippets.ts`,
+  mêmes tests) ; le SQL expansé est renvoyé dans `expanded_sql`.
+- **Garde-fous** : base ouverte en **lecture seule** côté SQLite
+  (`OpenOptions { read_only: true }` → `SQLITE_OPEN_READONLY`, pas de
+  `create_if_missing`) : une écriture échoue dans le moteur, sans dépendre d'un
+  parsing du SQL. Plafond **200 lignes** par défaut (max 5000). Projets
+  Postgres/MySQL refusés explicitement (v0.3). Un `dbPath` relatif est résolu
+  depuis le dossier du `.graft`. stdout est réservé au protocole (logs sur
+  stderr).
+- **Claude Code** : `.mcp.json` à la racine déclare le serveur `graft`
+  (`cargo run --quiet --package graft-mcp --`). Compiler une première fois
+  (`cargo build -p graft-mcp`) pour éviter un timeout au démarrage.
+
+### Direction (reste à faire)
 
 **Deux formes, à phaser :**
 
@@ -651,10 +726,12 @@ les blocs créés par Claude apparaissent **en direct** sur le canvas.
 - Jamais d'identifiants (mots de passe Postgres/MySQL) dans les réponses ; les
   secrets vivent dans le trousseau de l'OS.
 
-**Phasage proposé :** extraction de `graft-core` → serveur MCP stdio
-(SQLite, lecture seule + édition de blocs) → surveillance de fichier dans l'app
-→ écritures opt-in → support Postgres/MySQL (v0.3) → pont live → connecteur
-distant si une brique cloud voit le jour.
+**Phasage proposé :** ~~extraction de `graft-core`~~ ✓ → ~~serveur MCP stdio
+SQLite lecture seule~~ ✓ → tools d'édition de blocs (`create_block` /
+`update_block`, `generate_inserts`, `explain_query`) → surveillance de fichier
+dans l'app → écritures SQL opt-in → sidecar Tauri + « Installer dans Claude
+Desktop » → support Postgres/MySQL (v0.3) → pont live → connecteur distant si
+une brique cloud voit le jour.
 
 > Distinct de l'autre direction possible — **Claude dans Graft** (panneau
 > assistant appelant l'API Claude depuis l'app) — qui peut venir en complément

@@ -1,0 +1,17 @@
+[package]
+name = "graft-core"
+version = "0.1.0"
+description = "Graft engine shared by the desktop app and the MCP server: SQL execution, schema introspection, .graft files"
+authors = ["Jules Besson"]
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+dirs = { workspace = true }
+futures-util = { workspace = true }
+sqlx = { workspace = true }
+regex = "1"
+
+[dev-dependencies]
+tokio = { workspace = true }

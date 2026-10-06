@@ -214,16 +214,43 @@ d'exécuter.
   le curseur change (pas de poignées visibles).
 - **Minimap** : en bas à droite (cliquable/zoomable).
 
-## 5. Construire un binaire distribuable
+## 5. Utiliser Claude avec Graft (MCP)
+
+Le serveur **`graft-mcp`** permet à Claude (Claude Code, Claude Desktop) de lire
+tes projets Graft : lister les projets, lire le schéma et les blocs, et
+**exécuter des requêtes en lecture seule** (toute écriture est refusée par la
+base). L'app n'a pas besoin d'être ouverte.
+
+1. Compiler le serveur une fois : `cargo build -p graft-mcp`.
+2. **Claude Code**, dans ce dépôt : le fichier `.mcp.json` déclare déjà le
+   serveur `graft` ; accepte-le au lancement de Claude Code, puis vérifie avec
+   `/mcp`.
+3. **Claude Desktop** : ajoute dans sa config MCP
+   (`claude_desktop_config.json`) :
+   ```json
+   { "mcpServers": { "graft": {
+       "command": "/chemin/vers/Graft/target/debug/graft-mcp",
+       "args": ["--root", "/dossier/de/mes/projets"] } } }
+   ```
+
+Projets visibles : ceux du dossier par défaut `Documents/Graft` (ou
+`~/Graft`), plus chaque `--root <dossier>` et la variable
+`GRAFT_PROJECT_DIRS`. Demande par exemple à Claude : « liste mes projets
+Graft », « montre le schéma de *shop* », « exécute le bloc *Count* ».
+Les favoris `{{nom}}` sont expansés comme dans l'app. Seuls les projets
+**SQLite** sont interrogeables pour l'instant ; Claude ne peut pas encore
+créer ni modifier de blocs.
+
+## 6. Construire un binaire distribuable
 
 ```bash
 pnpm tauri build
 ```
 
-Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
-`.app`/`.dmg` sur macOS).
+Génère l'exécutable/installeur dans `target/release/` à la racine du dépôt
+(workspace Cargo), et le bundle `.app`/`.dmg` sur macOS.
 
-## 6. Limites actuelles (v0.1)
+## 7. Limites actuelles (v0.1)
 
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
   schéma + gutter + brackets + `Mod-Enter`) — reste à faire côté v0.2+ : LSP

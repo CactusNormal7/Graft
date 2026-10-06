@@ -4,8 +4,9 @@
 //! injected through rendered data (a crafted cell value, an imported file)
 //! would otherwise get the whole disk through `read_text_file` /
 //! `write_text_file`. Paths are therefore *granted* by the backend only when
-//! the user picks them in a native dialog (see `dialogs.rs`), and the file
-//! commands refuse anything that was not granted during this session.
+//! the user picks them in a native dialog (see `src-tauri/src/dialogs.rs`),
+//! and the file commands refuse anything that was not granted during this
+//! session.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

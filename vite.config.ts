@@ -25,8 +25,14 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching Rust sources and the Cargo workspace build dir
+      ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**"],
     },
+  },
+
+  // Vitest: tests live next to the frontend code. Scoping the search to `src`
+  // keeps it out of the (huge) Cargo `target/` dir at the workspace root.
+  test: {
+    dir: "src",
   },
 }));

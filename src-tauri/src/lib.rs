@@ -1,7 +1,10 @@
 mod db;
 mod dialogs;
 mod notebook;
-mod scope;
+
+/// The session file scope lives in `graft-core`; re-exported so `dialogs.rs`
+/// keeps addressing it as `crate::scope`.
+use graft_core::scope;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 

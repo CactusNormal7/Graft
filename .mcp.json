@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "graft": {
+      "command": "cargo",
+      "args": ["run", "--quiet", "--package", "graft-mcp", "--"]
+    }
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "graft-mcp"
+version = "0.1.0"
+description = "MCP server (stdio) giving Claude read-only access to Graft projects"
+authors = ["Jules Besson"]
+edition = "2021"
+
+[[bin]]
+name = "graft-mcp"
+path = "src/main.rs"
+
+[dependencies]
+graft-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+rmcp = { version = "3.5", features = ["server", "transport-io"] }

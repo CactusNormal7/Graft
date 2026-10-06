@@ -20,6 +20,7 @@ Current phase: v0.1 (proof of concept) — initial codebase scaffolded and build
 - **SQL editor**: CodeMirror 6 (`@uiw/react-codemirror` + `@codemirror/lang-sql`). Chosen over Monaco: the canvas embeds many small editors (one per block), where Monaco's per-instance weight is costly, while CodeMirror is light and ships schema-aware SQL autocompletion + highlighting out of the box. (Resolves the former open question.)
 - **SQL LSP**: sql-language-server (joe-re, Node) — covers Postgres, MySQL, and SQLite natively in one LSP, unlike postgres-language-server (Supabase/postgrestools) which is Postgres-only but more robust (built on libpg_query). Possible future migration to postgres-language-server for Postgres-specific users.
 - **DB connections**: native Rust drivers in the Tauri backend. `sqlx` recommended for a unified async API across Postgres/MySQL/SQLite rather than juggling separate crates per engine.
+- **Rust layout**: Cargo workspace at the repo root — `crates/graft-core` (engine: SQL execution, introspection, `.graft` read model, `{{snippet}}` expansion; no Tauri dependency), `src-tauri` (thin `#[tauri::command]` wrappers), `crates/graft-mcp` (read-only MCP stdio server for Claude, `rmcp`, declared in `.mcp.json`). Engine logic goes in `graft-core`, never directly in a transport crate. `snippets.rs` must stay in sync with `src/store/snippets.ts`.
 - **State management**: Zustand. Avoids the cascading re-renders Context API causes with per-block state (position, execution status, results).
 
 ## Non-Goals
@@ -54,3 +55,13 @@ The design system itself lives in **Claude Design** (project "Wireframe applicat
 - **v0.2**: Monaco integrated in blocks, basic autocomplete (tables/columns), syntax highlighting, inline errors
 - **v0.3**: schema explorer, visual connections between blocks and tables, Postgres + MySQL support
 - **v1.0**: polished canvas UX (zoom, groups, named zones), differentiated block types, notebook export, Tauri desktop distribution
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

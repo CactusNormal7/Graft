@@ -26,3 +26,12 @@ dist-ssr
 # Local databases / datasets — kept out of git (some exceed GitHub's 100 MB
 # limit). Devs supply their own sample DB locally.
 data/
+
+# Cargo workspace build output
+/target/
+
+# graphify knowledge graph (local, rebuilt by the post-commit hook)
+graphify-out/
+
+# graphify Claude Code hooks (absolute path to the local graphify binary)
+.claude/settings.json

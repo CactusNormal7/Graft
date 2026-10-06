@@ -1,0 +1,16 @@
+# Cargo workspace: the Tauri app, the shared engine, and the MCP server.
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/graft-core", "crates/graft-mcp"]
+
+[workspace.dependencies]
+graft-core = { path = "crates/graft-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+futures-util = { version = "0.3", default-features = false }
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "sqlite",
+] }
+tokio = { version = "1", features = ["full"] }

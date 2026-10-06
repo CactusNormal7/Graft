@@ -1,0 +1,5 @@
+# graphify: exclusions du graphe de connaissance
+src-tauri/icons/
+src-tauri/gen/
+.claude/
+.vscode/
