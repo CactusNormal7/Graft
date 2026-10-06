@@ -7,6 +7,8 @@ export type MenuAction =
       onClick?: () => void;
       shortcut?: string;
       disabled?: boolean;
+      /** Tooltip — typically why the item is disabled. */
+      hint?: string;
       danger?: boolean;
       separator?: false;
     }
@@ -64,11 +66,15 @@ export function BlockContextMenu({ x, y, actions, onClose }: Props) {
       {actions.map((a, i) => {
         if (a.separator) return <div key={i} className="ctx-menu__sep" />;
         return (
+          // aria-disabled instead of `disabled`: a disabled <button> swallows
+          // hover, so its tooltip (the reason it's unavailable) never shows.
           <button
             key={i}
             className={`ctx-menu__item${a.danger ? " is-danger" : ""}`}
-            disabled={a.disabled}
+            aria-disabled={a.disabled || undefined}
+            title={a.hint}
             onClick={() => {
+              if (a.disabled) return;
               a.onClick?.();
               onClose();
             }}

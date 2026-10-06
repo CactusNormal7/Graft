@@ -4,21 +4,9 @@ import { useGraftStore, type ResultNode } from "../store/useGraftStore";
 import { ResultTable } from "./ResultTable";
 import { BlockContextMenu, type MenuAction } from "./BlockContextMenu";
 import { useInnerScroll } from "./useInnerScroll";
+import { ResultFooter, STATUS_LABEL, VIEW_ICON, nextResultView } from "./blockChrome";
+import { rowToObject } from "./resultShape";
 import { normalizeResultView, type ChartConfig, type ResultView } from "../types";
-
-const STATUS_LABEL: Record<string, string> = {
-  idle: "idle",
-  running: "running…",
-  success: "● success",
-  error: "● error",
-};
-
-/** Glyph shown on the result-view toggle button, per active view. */
-const VIEW_ICON: Record<ResultView, string> = {
-  table: "☰",
-  json: "{}",
-  chart: "📊",
-};
 
 /**
  * Read-only companion node showing the last result of a source SQL block.
@@ -39,12 +27,7 @@ export function ResultBlockNode({ id, data, selected }: NodeProps<ResultNode>) {
   const resultScrollRef = useInnerScroll<HTMLDivElement>(selected === true);
   const hasResultRows = (data.result?.rows.length ?? 0) > 0;
 
-  const cycleView = () => {
-    // table → json → chart → table
-    const next: ResultView =
-      resultView === "table" ? "json" : resultView === "json" ? "chart" : "table";
-    setResultView(id, next);
-  };
+  const cycleView = () => setResultView(id, nextResultView(resultView));
 
   // Stable identity so the memoized <ResultTable> isn't invalidated on every
   // parent re-render.
@@ -68,12 +51,9 @@ export function ResultBlockNode({ id, data, selected }: NodeProps<ResultNode>) {
     {
       label: "Copy result as JSON",
       onClick: () => {
-        if (!data.result) return;
-        const rows = data.result.rows.map((row) => {
-          const obj: Record<string, unknown> = {};
-          data.result!.columns.forEach((c, i) => (obj[c] = row[i]));
-          return obj;
-        });
+        const result = data.result;
+        if (!result) return;
+        const rows = result.rows.map((row) => rowToObject(row, result.columns));
         void navigator.clipboard?.writeText(JSON.stringify(rows, null, 2));
       },
       disabled: !data.result || data.result.columns.length === 0,
@@ -161,8 +141,8 @@ export function ResultBlockNode({ id, data, selected }: NodeProps<ResultNode>) {
       )}
 
       {data.result && (
-        data.result.columns.length > 0 ? (
-          <>
+        <>
+          {data.result.columns.length > 0 && (
             <div
               className="sql-block__result sql-block__result--flex"
               ref={resultScrollRef}
@@ -175,24 +155,9 @@ export function ResultBlockNode({ id, data, selected }: NodeProps<ResultNode>) {
                 onChartConfigChange={handleChartConfig}
               />
             </div>
-            <div className="sql-block__footer sql-block__footer--success">
-              {data.result.truncated ? (
-                <span title={`Result capped at ${data.result.rows.length} rows`}>
-                  {data.result.rows.length} / {data.result.total_rows} row(s)
-                  <span className="text-muted"> · tronqué</span>
-                </span>
-              ) : (
-                <span>{data.result.rows.length} row(s)</span>
-              )}
-              <span className="text-muted">· {data.result.elapsed_ms} ms</span>
-            </div>
-          </>
-        ) : (
-          <div className="sql-block__footer sql-block__footer--success">
-            <span>{data.result.rows_affected} row(s) affected</span>
-            <span className="text-muted">· {data.result.elapsed_ms} ms</span>
-          </div>
-        )
+          )}
+          <ResultFooter result={data.result} />
+        </>
       )}
 
       {menuPos && (

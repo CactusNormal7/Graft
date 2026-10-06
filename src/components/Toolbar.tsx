@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useReactFlow, useStore } from "@xyflow/react";
 import { useGraftStore } from "../store/useGraftStore";
+import { basename } from "../paths";
 import type { BlockType } from "../types";
 
 const BLOCK_TYPES: BlockType[] = [
@@ -15,6 +16,8 @@ const BLOCK_TYPES: BlockType[] = [
 /** Top toolbar shown in the canvas view (see wireframe screens 02/03). */
 export function Toolbar() {
   const dbPath = useGraftStore((s) => s.dbPath);
+  const projectName = useGraftStore((s) => s.projectName);
+  const dirty = useGraftStore((s) => s.dirty);
   const nodeCount = useGraftStore((s) => s.nodes.length);
   const addBlock = useGraftStore((s) => s.addBlock);
   const addGroup = useGraftStore((s) => s.addGroup);
@@ -22,6 +25,7 @@ export function Toolbar() {
   const saveNotebook = useGraftStore((s) => s.saveNotebook);
   const importDataFile = useGraftStore((s) => s.importDataFile);
   const goHome = useGraftStore((s) => s.goHome);
+  const setPaletteOpen = useGraftStore((s) => s.setPaletteOpen);
 
   const { zoomIn, zoomOut, fitView } = useReactFlow();
   const zoom = useStore((s) => s.transform[2]);
@@ -40,13 +44,20 @@ export function Toolbar() {
     return () => document.removeEventListener("mousedown", onClick);
   }, [menuOpen]);
 
-  const dbLabel = dbPath ? dbPath.split("/").pop() : "No database";
+  const dbLabel = dbPath ? basename(dbPath) : "No database";
 
   return (
     <div className="toolbar">
       <button className="toolbar__brand" onClick={goHome} title="Home">
         graft
       </button>
+      <span
+        className="toolbar__project"
+        title={dirty ? "Unsaved changes" : "All changes saved"}
+      >
+        {projectName}
+        {dirty && <span className="unsaved-dot" aria-label="unsaved changes" />}
+      </span>
       <span className="sep" />
 
       <button
@@ -85,11 +96,15 @@ export function Toolbar() {
         + Group
       </button>
 
-      <button className="btn" onClick={runAll} disabled={nodeCount === 0}>
+      <button className="btn" onClick={() => void runAll()} disabled={nodeCount === 0}>
         ▶ Run all
       </button>
-      <button className="btn" onClick={saveNotebook}>
-        Save
+      <button
+        className="btn"
+        onClick={() => void saveNotebook()}
+        title={dirty ? "Save unsaved changes (⌘S / Ctrl+S)" : "Save (⌘S / Ctrl+S)"}
+      >
+        Save{dirty && " ●"}
       </button>
       <button
         className="btn"
@@ -101,11 +116,7 @@ export function Toolbar() {
       <button
         className="btn"
         title="Command palette — search favorite blocks (⌘K / Ctrl+K)"
-        onClick={() =>
-          window.dispatchEvent(
-            new KeyboardEvent("keydown", { key: "k", metaKey: true }),
-          )
-        }
+        onClick={() => setPaletteOpen(true)}
       >
         ⌘K
       </button>

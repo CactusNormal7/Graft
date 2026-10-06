@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
-import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import CodeMirror from "@uiw/react-codemirror";
 import {
   sql,
   SQLite,
@@ -50,7 +50,17 @@ export function SqlEditor({
   const focusRef = useRef(onFocus);
   focusRef.current = onFocus;
 
-  const cmRef = useRef<ReactCodeMirrorRef>(null);
+  // The EditorView is created asynchronously by @uiw/react-codemirror (after a
+  // re-render), so it can't be read from a ref in a mount effect — register it
+  // from `onCreateEditor` instead.
+  const viewRef = useRef<EditorView | null>(null);
+  const handleCreateEditor = useCallback(
+    (view: EditorView) => {
+      viewRef.current = view;
+      registerEditor(blockId, view);
+    },
+    [blockId],
+  );
 
   const extensions = useMemo(() => {
     const dialect = SQLite;
@@ -151,18 +161,18 @@ export function SqlEditor({
     ];
   }, [schema]);
 
-  // Register the editor view in the module-level registry so external UI
-  // (sidebar clicks) can dispatch edits into the currently focused block.
+  // Keep the module-level registry (used by the sidebar and the command
+  // palette to insert into the focused block) free of destroyed views.
   useEffect(() => {
-    const view = cmRef.current?.view;
-    if (!view) return;
-    registerEditor(blockId, view);
-    return () => unregisterEditor(blockId, view);
+    // Re-register after a StrictMode remount (onCreateEditor won't fire again).
+    if (viewRef.current) registerEditor(blockId, viewRef.current);
+    return () => {
+      if (viewRef.current) unregisterEditor(blockId, viewRef.current);
+    };
   }, [blockId]);
 
   return (
     <CodeMirror
-      ref={cmRef}
       className="nodrag sql-block__cm"
       value={value}
       theme="dark"
@@ -180,6 +190,7 @@ export function SqlEditor({
       }}
       extensions={extensions}
       onChange={onChange}
+      onCreateEditor={handleCreateEditor}
     />
   );
 }

@@ -78,12 +78,16 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
 - **Persistance** : fichiers `.graft` (JSON, diff-friendly avec Git) vs. SQLite
   embarqué (meilleur pour la recherche plein texte transverse, prévue comme
   fonctionnalité cœur) — peut-être les deux. *(v0.1 implémente le JSON.)*
-- **Éditeur SQL** : Monaco vs. CodeMirror 6.
+- ~~**Éditeur SQL** : Monaco vs. CodeMirror 6.~~ Tranché : CodeMirror 6.
 - **GraphQL** : à l'étude. Interprétation et avis détaillés dans
   `docs/technique.md` § GraphQL. En résumé : pertinent comme **fonctionnalité**
   (générer/exposer une API GraphQL depuis le schéma, type PostGraphile/Hasura),
   à phaser tard et en module ; **à proscrire** comme transport interne
   frontend↔backend (les commandes Tauri natives suffisent).
+- **Intégration Claude** : *besoin acté*, forme à détailler. Graft devra être
+  pilotable par Claude via un **serveur MCP** (local d'abord), puis un
+  **connecteur personnalisé** (MCP distant) pour claude.ai. Direction, surface
+  et garde-fous dans `docs/technique.md` § Intégration Claude.
 
 ## Trajectoire (roadmap)
 

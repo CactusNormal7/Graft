@@ -107,6 +107,28 @@ button {
   flex: 1;
 }
 
+.toolbar__project {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unsaved-changes marker (toolbar project name + Save button). */
+.unsaved-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+  background: var(--warning);
+}
+
 .toolbar__zoom {
   color: var(--muted);
   font-size: var(--text-sm);
@@ -1578,12 +1600,12 @@ button {
   width: 100%;
 }
 
-.ctx-menu__item:hover:not(:disabled) {
+.ctx-menu__item:hover:not([aria-disabled="true"]) {
   background: var(--panel-3);
   color: var(--text);
 }
 
-.ctx-menu__item:disabled {
+.ctx-menu__item[aria-disabled="true"] {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -1592,7 +1614,7 @@ button {
   color: var(--error);
 }
 
-.ctx-menu__item.is-danger:hover:not(:disabled) {
+.ctx-menu__item.is-danger:hover:not([aria-disabled="true"]) {
   background: var(--error-dim);
   color: var(--error);
 }

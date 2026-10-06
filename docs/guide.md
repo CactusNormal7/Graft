@@ -47,7 +47,11 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
     **existant** (ex. `data/sample.db`), ou laisse vide pour créer un nouveau
     `<nom>.db` à côté du projet.
   À la validation, le projet est **créé et sauvegardé immédiatement**
-  (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas.
+  (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas. Si un projet du
+  même nom existe déjà à cet emplacement, la création est **refusée** (il n'est
+  jamais écrasé) : ouvre-le ou choisis un autre nom. Le nom ne peut pas contenir
+  de séparateur de chemin ni les caractères interdits par Windows
+  (`: * ? " < > |`).
 - **Projets récents** → liste persistée ; clique pour **rouvrir**, ✕ pour retirer
   de la liste.
 - **Open file…** → ouvre un `.graft` existant où qu'il soit.
@@ -92,7 +96,8 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      Clic droit sur le bouton (ou sur le bloc) pour choisir directement la vue.
    - **Pagination** : au-delà de **100 lignes** (ou 100 groupes en vue nested),
      une barre de pagination apparaît en pied de résultat (‹ / ›, plage
-     affichée, sélecteur **50 / 100 / 500 / Tout**). Purement côté client.
+     affichée, sélecteur **50 / 100 / 500 / All**). Purement côté client. La
+     barre reste visible dès que la taille de page choisie découpe le résultat.
    - **⇥** route le résultat vers un **bloc lié** (créé à droite au premier
      Run, connecté par une arête). Utile quand le résultat prend beaucoup
      de place ou qu'on veut le comparer à côté.
@@ -105,7 +110,22 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      Rename, Copy SQL, changement de vue, toggle bloc-lié, Delete).
    - **Clic droit sur une cellule ou une ligne** de résultat : copies
      (valeur, colonne, ligne en JSON/INSERT/TSV) et snippets SQL (clause
-     `WHERE`, `SELECT` filtré, template `UPDATE`).
+     `WHERE`, `SELECT` filtré, template `UPDATE`), plus des actions qui
+     **ouvrent le SQL dans un nouveau bloc**, à relire puis exécuter (rien
+     n'est modifié directement) :
+     - cellule : **Set NULL → new block** (`UPDATE … SET col = NULL WHERE <clé>`),
+       **Open row in new block** (`SELECT * … WHERE <clé>`) ;
+     - ligne : **Open row in new block**, **Duplicate row → new block**
+       (`INSERT` d'une copie ; une clé `INTEGER PRIMARY KEY` est laissée à la
+       base, une autre clé est recopiée et doit être modifiée),
+       **Delete row → new block** (`DELETE … WHERE <clé>`).
+
+     Elles ne s'activent que si le résultat correspond **sans ambiguïté à une
+     seule table** (toutes les colonnes en viennent) **et contient sa clé
+     primaire** — typiquement un `SELECT * FROM table`. Sinon elles sont grisées
+     et leur infobulle dit pourquoi (jointure, clé primaire non sélectionnée,
+     table sans clé primaire…). Dans ce cas les copies utilisent aussi le vrai
+     nom de table au lieu du placeholder `«table»`.
    - **Redimensionnement** : sélectionne un bloc, les poignées apparaissent
      sur les bords/coins ; taille persistée dans le fichier `.graft`.
 4. **Sidebar — explorateur de schéma** : les tables de la base connectée
@@ -130,15 +150,22 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
    chacune avec son propre canvas de blocs/groupes. **Clic** pour changer de
    page, **double-clic** pour renommer, **clic droit** pour supprimer, **+**
    pour en ajouter. Toutes les pages sont enregistrées dans le même `.graft`.
-9. **Save** → enregistre le projet (toutes les pages) dans un fichier `.graft`
-   (JSON). Le clic sur **graft** (en haut à gauche) revient à l'accueil.
+9. **Save** (ou **⌘S / Ctrl+S**) → enregistre le projet (toutes les pages)
+   dans son fichier `.graft` (JSON). Un **point orange** après le nom du projet
+   (et « Save ● ») signale des **modifications non sauvegardées** — SQL,
+   position/taille des blocs, pages, favoris… ; exécuter une requête n'en est
+   pas une. Ouvrir ou créer un autre projet, fermer la fenêtre ou quitter
+   l'app demande alors confirmation. Le clic sur **graft** (en haut à gauche)
+   revient à l'accueil sans fermer le projet : **↩ Back to <projet>** y ramène.
 10. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
    en bas à droite.
 
 ### Blocs favoris & sous-requêtes (`{{nom}}`)
 - **Enregistrer un favori** : clic droit sur un bloc → **« Save as favorite… »**,
   puis choisis un nom. Les favoris sont listés dans la sidebar et enregistrés
-  dans le `.graft`.
+  dans le `.graft`. Le nom est normalisé pour être référençable : seuls lettres,
+  chiffres, `_`, `.` et `-` sont gardés, le reste devient `_` (« Query 1 » →
+  `Query_1`).
 - **Réutiliser un favori dans une requête** : écris `{{nom}}` là où tu veux une
   sous-requête. À l'exécution, la référence est remplacée par le SQL du favori
   **entre parenthèses** :
@@ -162,7 +189,8 @@ Une requête avec jointures donne une vue imbriquée (`{}`) — et cette vue est
   - **Generate INSERTs → new block** — crée un bloc `script` contenant les
     INSERT. Si la relation est détectée, ce sont des INSERT **multi-tables** :
     un INSERT parent suivi de ses enfants, la clé étrangère étant renseignée
-    automatiquement (valeur de la PK si présente, sinon `last_insert_rowid()`).
+    automatiquement (valeur de la clé si elle est sélectionnée, sinon une
+    sous-requête qui relit la clé de la dernière ligne parent insérée).
   - **Copy INSERTs** — la même chose dans le presse-papiers.
   - **Export INSERTs (.sql)…** — écrit un fichier `.sql`.
 - **Import…** (toolbar) :

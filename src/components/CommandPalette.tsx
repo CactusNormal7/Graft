@@ -12,7 +12,8 @@ export function CommandPalette() {
   const insertSnippetRef = useGraftStore((s) => s.insertSnippetRef);
   const addBlockFromSnippet = useGraftStore((s) => s.addBlockFromSnippet);
 
-  const [open, setOpen] = useState(false);
+  const open = useGraftStore((s) => s.paletteOpen);
+  const setOpen = useGraftStore((s) => s.setPaletteOpen);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -22,19 +23,22 @@ export function CommandPalette() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((o) => !o);
-        setQuery("");
-        setActive(0);
+        setOpen(!useGraftStore.getState().paletteOpen);
       } else if (e.key === "Escape") {
         setOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [setOpen]);
 
+  // Start from a clean search every time the palette opens, however it was
+  // opened (shortcut or toolbar button).
   useEffect(() => {
-    if (open) inputRef.current?.focus();
+    if (!open) return;
+    setQuery("");
+    setActive(0);
+    inputRef.current?.focus();
   }, [open]);
 
   const results = useMemo(() => {

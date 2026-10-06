@@ -98,11 +98,6 @@ export function detectNestedShape(result: QueryResult): NestedShape | null {
   };
 }
 
-/** Convenience — true iff the nested shape has something to show. */
-export function hasNestedShape(result: QueryResult): boolean {
-  return detectNestedShape(result) !== null;
-}
-
 /** Build the grouped tree using the detected shape. Groups reference the raw
  *  rows; no per-cell objects are allocated here. */
 export function buildNestedGroups(
@@ -151,6 +146,25 @@ export function buildNestedGroups(
   }
 
   return order.map((k) => map.get(k)!);
+}
+
+/** Map one positional row into a `{ column: value }` object. A repeated column
+ *  name (e.g. `SELECT a.id, b.id`) gets a `_2`, `_3`… suffix instead of
+ *  silently overwriting the earlier value. */
+export function rowToObject(row: Cell[], columns: string[]): Record<string, Cell> {
+  const o: Record<string, Cell> = {};
+  for (let i = 0; i < columns.length; i++) o[uniqueKey(o, columns[i])] = row[i];
+  return o;
+}
+
+/** `name`, or the first `name_N` not yet present in `o`. */
+export function uniqueKey(o: object, name: string): string {
+  // Own-property check: `in` would also see inherited keys like "constructor".
+  const taken = (k: string) => Object.prototype.hasOwnProperty.call(o, k);
+  if (!taken(name)) return name;
+  let n = 2;
+  while (taken(`${name}_${n}`)) n++;
+  return `${name}_${n}`;
 }
 
 // ---------------------------------------------------------------------------

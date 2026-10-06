@@ -29,7 +29,8 @@ export function useInnerScroll<T extends HTMLElement>(enabled: boolean) {
       e.stopPropagation();
     };
 
-    el.addEventListener("wheel", onWheel, { passive: false });
+    // Passive: we only stop propagation, never preventDefault the scroll.
+    el.addEventListener("wheel", onWheel, { passive: true });
     return () => el.removeEventListener("wheel", onWheel);
   }, [enabled]);
 

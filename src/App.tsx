@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useGraftStore } from "./store/useGraftStore";
 import { HomeScreen } from "./screens/HomeScreen";
@@ -10,6 +11,20 @@ import { GraftCanvas } from "./canvas/GraftCanvas";
 
 function App() {
   const view = useGraftStore((s) => s.view);
+  const saveNotebook = useGraftStore((s) => s.saveNotebook);
+
+  // ⌘S / Ctrl+S saves the open project (also from inside a block editor).
+  useEffect(() => {
+    if (view !== "canvas") return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void saveNotebook();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view, saveNotebook]);
 
   if (view === "home") {
     return <HomeScreen />;

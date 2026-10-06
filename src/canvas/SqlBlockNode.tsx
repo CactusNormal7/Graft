@@ -5,21 +5,8 @@ import { SqlEditor } from "../components/SqlEditor";
 import { ResultTable } from "./ResultTable";
 import { BlockContextMenu, type MenuAction } from "./BlockContextMenu";
 import { useInnerScroll } from "./useInnerScroll";
+import { ResultFooter, STATUS_LABEL, VIEW_ICON, nextResultView } from "./blockChrome";
 import { normalizeResultView, type ChartConfig, type ResultView } from "../types";
-
-const STATUS_LABEL: Record<string, string> = {
-  idle: "idle",
-  running: "running…",
-  success: "● success",
-  error: "● error",
-};
-
-/** Glyph shown on the result-view toggle button, per active view. */
-const VIEW_ICON: Record<ResultView, string> = {
-  table: "☰",
-  json: "{}",
-  chart: "📊",
-};
 
 export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
   const updateSql = useGraftStore((s) => s.updateSql);
@@ -72,12 +59,7 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
     setEditingTitle(false);
   };
 
-  const cycleView = () => {
-    // table → json → chart → table
-    const next: ResultView =
-      resultView === "table" ? "json" : resultView === "json" ? "chart" : "table";
-    setResultView(id, next);
-  };
+  const cycleView = () => setResultView(id, nextResultView(resultView));
 
   const openMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -141,8 +123,6 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
       onClick: () => void exportInsertsAction(id),
       disabled: !hasResultRows,
     },
-    { separator: true },
-    { label: "Bring to front", disabled: true },
     { separator: true },
     { label: "Delete", onClick: () => deleteBlock(id), danger: true },
   ];
@@ -288,8 +268,8 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
       )}
 
       {!collapsed && hasEmbeddedResult && data.result && (
-        data.result.columns.length > 0 ? (
-          <>
+        <>
+          {data.result.columns.length > 0 && (
             <div
               className="sql-block__result"
               ref={resultScrollRef}
@@ -302,24 +282,9 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
                 onChartConfigChange={handleChartConfig}
               />
             </div>
-            <div className="sql-block__footer sql-block__footer--success">
-              {data.result.truncated ? (
-                <span title={`Result capped at ${data.result.rows.length} rows`}>
-                  {data.result.rows.length} / {data.result.total_rows} row(s)
-                  <span className="text-muted"> · tronqué</span>
-                </span>
-              ) : (
-                <span>{data.result.rows.length} row(s)</span>
-              )}
-              <span className="text-muted">· {data.result.elapsed_ms} ms</span>
-            </div>
-          </>
-        ) : (
-          <div className="sql-block__footer sql-block__footer--success">
-            <span>{data.result.rows_affected} row(s) affected</span>
-            <span className="text-muted">· {data.result.elapsed_ms} ms</span>
-          </div>
-        )
+          )}
+          <ResultFooter result={data.result} />
+        </>
       )}
 
       {!collapsed && emitToBlock && !data.linkedResultId && (

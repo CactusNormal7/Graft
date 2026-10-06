@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { NodeResizer, type NodeProps } from "@xyflow/react";
-import { useGraftStore, type GroupNode as GroupNodeType } from "../store/useGraftStore";
-
-/** Colors offered in the inline swatch picker (mirror of the store palette). */
-const SWATCHES = ["#6ea8fe", "#4ade80", "#fbbf74", "#f0819b", "#c9a8ff", "#5eead4"];
+import {
+  GROUP_COLORS,
+  useGraftStore,
+  type GroupNode as GroupNodeType,
+} from "../store/useGraftStore";
 
 /** Translucent version of a hex color for fills. */
 function hexToRgba(hex: string, alpha: number): string {
@@ -108,7 +109,7 @@ export function GroupNode({ id, data }: NodeProps<GroupNodeType>) {
 
         {paletteOpen && (
           <div className="group-node__palette nodrag">
-            {SWATCHES.map((c) => (
+            {GROUP_COLORS.map((c) => (
               <button
                 key={c}
                 className="group-node__swatch-btn"
