@@ -216,10 +216,11 @@ d'exécuter.
 
 ## 5. Utiliser Claude avec Graft (MCP)
 
-Le serveur **`graft-mcp`** permet à Claude (Claude Code, Claude Desktop) de lire
-tes projets Graft : lister les projets, lire le schéma et les blocs, et
-**exécuter des requêtes en lecture seule** (toute écriture est refusée par la
-base). L'app n'a pas besoin d'être ouverte.
+Le serveur **`graft-mcp`** permet à Claude (Claude Code, Claude Desktop) de
+travailler dans tes projets Graft : lister les projets, lire le schéma et les
+blocs, **exécuter des requêtes en lecture seule** (toute écriture est refusée
+par la base), afficher un plan d'exécution, et **créer / modifier / supprimer
+des blocs** sur le canvas. L'app n'a pas besoin d'être ouverte.
 
 1. Compiler le serveur une fois : `cargo build -p graft-mcp`.
 2. **Claude Code**, dans ce dépôt : le fichier `.mcp.json` déclare déjà le
@@ -238,8 +239,15 @@ Projets visibles : ceux du dossier par défaut `Documents/Graft` (ou
 `GRAFT_PROJECT_DIRS`. Demande par exemple à Claude : « liste mes projets
 Graft », « montre le schéma de *shop* », « exécute le bloc *Count* ».
 Les favoris `{{nom}}` sont expansés comme dans l'app. Seuls les projets
-**SQLite** sont interrogeables pour l'instant ; Claude ne peut pas encore
-créer ni modifier de blocs.
+**SQLite** sont interrogeables pour l'instant.
+
+**Blocs écrits par Claude.** Claude modifie le fichier `.graft`, jamais la
+base : pour changer des données ou le schéma, il écrit le SQL dans un bloc que
+tu relis puis exécutes toi-même. Si le projet est ouvert dans Graft, l'app
+recharge le fichier automatiquement ; si tu as des modifications non
+sauvegardées, elle te demande d'abord (« Project changed on disk ») — refuser
+garde ta version, et ton prochain ⌘S remplacera celle de Claude. Pour
+n'autoriser que la lecture, ajoute `--read-only` aux `args` du serveur.
 
 ## 6. Construire un binaire distribuable
 

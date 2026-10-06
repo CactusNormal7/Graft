@@ -1,17 +1,21 @@
-//! Typed, read-side model of a `.graft` project file.
+//! Typed model of a `.graft` project file.
 //!
-//! Mirrors `NotebookFile` in `src/types.ts`. The app (TypeScript) remains the
-//! writer of the format; this module lets Rust consumers (the MCP server) read
-//! any version (v1–v5) without losing data: every struct keeps the fields it
-//! does not model in an `extra` map, so a load → save round trip is lossless.
+//! Mirrors `NotebookFile` in `src/types.ts`. Rust consumers (the MCP server)
+//! read any version (v1–v5) and can edit SQL blocks without losing data: every
+//! struct keeps the fields it does not model in an `extra` map, and
+//! `serde_json`'s `preserve_order` keeps key order, so a load → save round
+//! trip is lossless and diffs stay minimal. New nodes are shaped exactly like
+//! the app's (`newSqlNode` in `src/store/useGraftStore.ts`).
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::db::TableInfo;
-use crate::files::load_project_file;
+use crate::files::{load_project_file, save_project_file};
 
 /// Name given to the single page of a pre-v4 (flat) file, as in the app.
 const LEGACY_PAGE_NAME: &str = "Page 1";
@@ -36,6 +40,8 @@ pub struct NotebookNode {
     /// Absent in v1 files (all nodes were `sqlBlock`).
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    #[serde(default)]
+    pub position: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     #[serde(default)]
@@ -213,6 +219,199 @@ impl Project {
     }
 }
 
+// --- Editing -----------------------------------------------------------------
+
+/// Block kinds the app knows (`BlockType` in `src/types.ts`).
+pub const BLOCK_TYPES: &[&str] = &["query", "migration", "procedure", "trigger", "view", "script"];
+
+/// Default size of a new SQL block, as in the app.
+const DEFAULT_BLOCK_WIDTH: i64 = 520;
+const DEFAULT_BLOCK_HEIGHT: i64 = 300;
+/// Spacing of the staggered grid new blocks are placed on.
+const BLOCK_GAP: i64 = 40;
+
+/// A SQL block to add to a project.
+#[derive(Clone, Debug)]
+pub struct NewBlock {
+    pub title: String,
+    pub block_type: String,
+    pub sql: String,
+    /// Canvas position; defaults to the next slot of the app's staggered grid.
+    pub position: Option<(f64, f64)>,
+}
+
+/// Fields of a SQL block that can be changed; `None` leaves a field as is.
+#[derive(Clone, Debug, Default)]
+pub struct BlockPatch {
+    pub title: Option<String>,
+    pub block_type: Option<String>,
+    pub sql: Option<String>,
+}
+
+fn validate_block_type(block_type: &str) -> Result<(), String> {
+    if BLOCK_TYPES.contains(&block_type) {
+        Ok(())
+    } else {
+        Err(format!("unknown block type {block_type:?} (expected one of {BLOCK_TYPES:?})"))
+    }
+}
+
+/// Port of the app's `staggeredPosition`: 4 blocks per row.
+fn staggered_position(index: usize) -> Value {
+    serde_json::json!({
+        "x": 80 + (index % 4) as i64 * (DEFAULT_BLOCK_WIDTH + BLOCK_GAP),
+        "y": 80 + (index / 4) as i64 * (DEFAULT_BLOCK_HEIGHT + BLOCK_GAP),
+    })
+}
+
+/// A new node id, in the app's `block-<ms>-<seq>` format.
+fn next_block_id() -> String {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis());
+    format!("block-{ms}-{}", SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+/// The nodes and edges of one page, borrowed for editing.
+type PageParts<'a> = (&'a mut Vec<NotebookNode>, &'a mut Vec<Value>);
+
+impl NotebookFile {
+    /// True when the file stores its canvas as pages (v4+) rather than flat.
+    fn is_paged(&self) -> bool {
+        self.pages.as_ref().is_some_and(|p| !p.is_empty())
+    }
+
+    /// Every page's nodes and edges, for editing. A flat (v1–v3) file has a
+    /// single implicit page and is kept flat — no format migration.
+    fn all_parts_mut(&mut self) -> Vec<PageParts<'_>> {
+        if self.is_paged() {
+            self.pages
+                .iter_mut()
+                .flatten()
+                .map(|p| (&mut p.nodes, &mut p.edges))
+                .collect()
+        } else {
+            vec![(
+                self.nodes.get_or_insert_with(Vec::new),
+                self.edges.get_or_insert_with(Vec::new),
+            )]
+        }
+    }
+
+    /// The nodes of the page `page` (id or name), or of the first page.
+    fn page_nodes_mut(&mut self, page: Option<&str>) -> Result<&mut Vec<NotebookNode>, String> {
+        if !self.is_paged() {
+            return match page {
+                Some(q) if q != LEGACY_PAGE_ID && q != LEGACY_PAGE_NAME => {
+                    Err(format!("no page {q:?} (this project has a single page)"))
+                }
+                _ => Ok(self.nodes.get_or_insert_with(Vec::new)),
+            };
+        }
+        let pages = self.pages.as_mut().expect("paged");
+        let found = match page {
+            None => pages.first_mut(),
+            Some(q) => pages.iter_mut().find(|p| p.id == q || p.name == q),
+        };
+        found
+            .map(|p| &mut p.nodes)
+            .ok_or_else(|| format!("no page {:?}", page.unwrap_or_default()))
+    }
+}
+
+impl Project {
+    /// Add a SQL block to `page` (id or name; default: the first page).
+    pub fn create_block(&mut self, page: Option<&str>, block: NewBlock) -> Result<SqlBlock, String> {
+        validate_block_type(&block.block_type)?;
+        let nodes = self.file.page_nodes_mut(page)?;
+        let position = match block.position {
+            Some((x, y)) => serde_json::json!({ "x": x, "y": y }),
+            None => staggered_position(nodes.len()),
+        };
+        let mut data = Map::new();
+        data.insert("title".into(), block.title.into());
+        data.insert("blockType".into(), block.block_type.into());
+        data.insert("sql".into(), block.sql.into());
+        data.insert("status".into(), "idle".into());
+        data.insert("result".into(), Value::Null);
+        data.insert("error".into(), Value::Null);
+        data.insert("width".into(), DEFAULT_BLOCK_WIDTH.into());
+        data.insert("height".into(), DEFAULT_BLOCK_HEIGHT.into());
+        let node = NotebookNode {
+            id: next_block_id(),
+            kind: Some("sqlBlock".into()),
+            position,
+            parent_id: None,
+            data,
+            extra: Map::new(),
+        };
+        let created = node.sql_block().expect("a sqlBlock node");
+        nodes.push(node);
+        Ok(created)
+    }
+
+    /// Change the title, type and/or SQL of a SQL block. Every other field
+    /// (size, result view, chart config…) is left untouched.
+    pub fn update_block(&mut self, block_id: &str, patch: BlockPatch) -> Result<SqlBlock, String> {
+        if let Some(t) = &patch.block_type {
+            validate_block_type(t)?;
+        }
+        let node = self
+            .file
+            .all_parts_mut()
+            .into_iter()
+            .flat_map(|(nodes, _)| nodes.iter_mut())
+            .find(|n| n.id == block_id && n.kind() == "sqlBlock")
+            .ok_or_else(|| format!("no SQL block {block_id:?}"))?;
+        for (key, value) in [("title", patch.title), ("blockType", patch.block_type), ("sql", patch.sql)] {
+            if let Some(v) = value {
+                node.data.insert(key.into(), v.into());
+            }
+        }
+        Ok(node.sql_block().expect("a sqlBlock node"))
+    }
+
+    /// Delete a SQL or result block, like the app's `deleteBlock`: a SQL
+    /// block takes its linked result block with it, a result block is unlinked
+    /// from its source, and edges touching removed nodes go too. Groups are
+    /// left to the app (deleting one re-parents its children).
+    /// Returns the ids removed.
+    pub fn delete_block(&mut self, block_id: &str) -> Result<Vec<String>, String> {
+        for (nodes, edges) in self.file.all_parts_mut() {
+            let Some(target) = nodes.iter().find(|n| n.id == block_id) else { continue };
+            let kind = target.kind().to_string();
+            let field = |key: &str| target.data.get(key).and_then(Value::as_str).map(str::to_owned);
+            let (linked, source) = (field("linkedResultId"), field("sourceId"));
+
+            let mut removed = vec![block_id.to_string()];
+            match kind.as_str() {
+                "sqlBlock" => removed.extend(linked),
+                "resultBlock" => {
+                    if let Some(src) = nodes.iter_mut().find(|n| Some(&n.id) == source.as_ref()) {
+                        src.data.insert("linkedResultId".into(), Value::Null);
+                    }
+                }
+                other => return Err(format!("{block_id:?} is a {other} node; delete it in the app")),
+            }
+            nodes.retain(|n| !removed.contains(&n.id));
+            edges.retain(|e| {
+                let touches = |k: &str| e.get(k).and_then(Value::as_str).is_some_and(|id| removed.iter().any(|r| r == id));
+                !touches("source") && !touches("target")
+            });
+            return Ok(removed);
+        }
+        Err(format!("no block {block_id:?}"))
+    }
+
+    /// Write the project back to its `.graft` file (atomically), formatted
+    /// like the app (2-space indented JSON).
+    pub fn save(&self) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(&self.file).map_err(|e| e.to_string())?;
+        save_project_file(&self.path, &json)
+    }
+}
+
 /// Read and parse the `.graft` file at `path`.
 pub fn load_project(path: &Path) -> Result<Project, String> {
     let json = load_project_file(path)?;
@@ -279,6 +478,94 @@ mod tests {
         assert_eq!(p.block("b2").unwrap().page_id, "p2");
         assert_eq!(p.file.snippets[0].name, "recent");
         assert!(p.file.db_schema.as_ref().unwrap()[0].columns[0].pk);
+    }
+
+    fn new_block(title: &str) -> NewBlock {
+        NewBlock {
+            title: title.into(),
+            block_type: "query".into(),
+            sql: "SELECT 1".into(),
+            position: None,
+        }
+    }
+
+    #[test]
+    fn creates_blocks_shaped_like_the_app() {
+        let mut p = project(V5_PAGED);
+        let created = p.create_block(Some("Other"), new_block("New")).unwrap();
+        assert!(created.id.starts_with("block-"));
+        let out = serde_json::to_value(&p.file).unwrap();
+        let node = &out["pages"][1]["nodes"][1];
+        assert_eq!(node["type"], "sqlBlock");
+        assert_eq!(node["data"]["status"], "idle");
+        assert_eq!(node["data"]["width"], 520);
+        // Second node on the page → second slot of the staggered grid.
+        assert_eq!(node["position"]["x"], 80 + 560);
+        assert_eq!(p.blocks(Some("p2")).len(), 2);
+
+        assert!(p.create_block(Some("nope"), new_block("x")).is_err());
+        let mut bad = new_block("x");
+        bad.block_type = "table".into();
+        assert!(p.create_block(None, bad).is_err());
+    }
+
+    #[test]
+    fn edits_a_flat_file_without_migrating_it() {
+        let mut p = project(V3_FLAT);
+        let created = p.create_block(None, new_block("Flat")).unwrap();
+        assert_eq!(p.blocks(None).len(), 2);
+        let out = serde_json::to_value(&p.file).unwrap();
+        assert!(out.get("pages").is_none(), "stays a flat v3 file");
+        assert_eq!(out["version"], 3);
+        assert!(p.create_block(Some("Other"), new_block("x")).is_err());
+        assert_eq!(p.delete_block(&created.id).unwrap(), vec![created.id]);
+    }
+
+    #[test]
+    fn updates_only_the_patched_fields() {
+        let mut p = project(V5_PAGED);
+        let patch = BlockPatch { sql: Some("SELECT 42".into()), ..Default::default() };
+        let updated = p.update_block("b1", patch).unwrap();
+        assert_eq!(updated.sql, "SELECT 42");
+        assert_eq!(updated.title, "Q");
+        let out = serde_json::to_value(&p.file).unwrap();
+        assert_eq!(out["pages"][0]["nodes"][0]["data"]["width"], 520);
+        assert!(p.update_block("r1", BlockPatch::default()).is_err(), "result blocks have no SQL");
+        assert!(p.update_block("missing", BlockPatch::default()).is_err());
+    }
+
+    #[test]
+    fn deletes_with_the_apps_cascade() {
+        let linked = V5_PAGED.replace(r#""width":520"#, r#""width":520,"linkedResultId":"r1""#);
+        let mut p = project(&linked);
+        assert_eq!(p.delete_block("b1").unwrap(), vec!["b1", "r1"]);
+        let out = serde_json::to_value(&p.file).unwrap();
+        assert_eq!(out["pages"][0]["nodes"].as_array().unwrap().len(), 0);
+        assert_eq!(out["pages"][0]["edges"].as_array().unwrap().len(), 0);
+
+        let mut p = project(&linked);
+        assert_eq!(p.delete_block("r1").unwrap(), vec!["r1"]);
+        assert_eq!(p.block("b1").unwrap().block.id, "b1");
+        let out = serde_json::to_value(&p.file).unwrap();
+        assert_eq!(out["pages"][0]["nodes"][0]["data"]["linkedResultId"], Value::Null);
+    }
+
+    #[test]
+    fn saves_atomically_and_keeps_key_order() {
+        let dir = std::env::temp_dir().join(format!("graft-nbsave-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("p.graft");
+        let mut p = project(V5_PAGED);
+        p.path = path.clone();
+        p.update_block("b2", BlockPatch { title: Some("Renamed".into()), ..Default::default() })
+            .unwrap();
+        p.save().unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let first_keys: Vec<&str> = text.lines().skip(1).take(3).map(str::trim).collect();
+        assert!(first_keys[0].starts_with("\"version\""));
+        assert!(first_keys[1].starts_with("\"name\""));
+        assert_eq!(load_project(&path).unwrap().block("b2").unwrap().block.title, "Renamed");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

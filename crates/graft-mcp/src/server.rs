@@ -1,11 +1,18 @@
-//! MCP tools and resources over Graft projects. Read-only by construction:
-//! every database is opened with `OpenOptions { read_only: true }`, so a write
-//! statement fails in SQLite itself rather than relying on SQL parsing.
+//! MCP tools and resources over Graft projects.
+//!
+//! Databases are read-only by construction: every one is opened with
+//! `OpenOptions { read_only: true }`, so a write statement fails in SQLite
+//! itself rather than relying on SQL parsing. The block tools (create / update
+//! / delete) write the `.graft` file only — never the database — and can be
+//! turned off with `--read-only`. An open Graft app reloads the file.
 
 use std::path::PathBuf;
+use std::sync::Arc;
+
+use tokio::sync::{Mutex, MutexGuard};
 
 use graft_core::db::{self, OpenOptions};
-use graft_core::notebook::Project;
+use graft_core::notebook::{BlockPatch, NewBlock, Project, BLOCK_TYPES};
 use graft_core::snippets::expand_snippets;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -26,10 +33,16 @@ use crate::projects::Roots;
 /// shape of a result without flooding the model's context.
 const DEFAULT_MAX_ROWS: usize = 200;
 
-const INSTRUCTIONS: &str = "Read-only access to Graft projects (SQL notebooks laid out on a canvas). \
-Start with list_projects, then get_schema / list_blocks. run_query and run_block execute SQL \
+const INSTRUCTIONS: &str = "Access to Graft projects (SQL notebooks laid out on a canvas). \
+Start with list_projects, then get_schema / list_blocks. run_query, run_block and explain_query execute SQL \
 read-only (writes are rejected by the database) and expand {{favorite}} references like the app does. \
+create_block / update_block / delete_block edit the project's .graft file (never the database); an open \
+Graft app reloads it. To change data or schema, write the SQL into a block for the user to review and run. \
 Only SQLite projects can be queried for now.";
+
+/// Error returned by the block tools when the server runs with `--read-only`.
+const READ_ONLY_ERROR: &str =
+    "this graft-mcp server runs with --read-only: block editing is disabled";
 
 #[derive(Deserialize, JsonSchema)]
 pub struct ProjectArgs {
@@ -73,9 +86,54 @@ pub struct RunBlockArgs {
     pub max_rows: Option<usize>,
 }
 
+#[derive(Deserialize, JsonSchema)]
+pub struct ExplainArgs {
+    /// Project name or .graft path.
+    pub project: String,
+    /// SQL to explain (EXPLAIN QUERY PLAN). `{{name}}` favorites are expanded.
+    pub sql: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct CreateBlockArgs {
+    /// Project name or .graft path.
+    pub project: String,
+    /// Block title shown on the canvas.
+    pub title: String,
+    /// SQL of the block. May reference `{{favorite}}` blocks.
+    pub sql: String,
+    /// One of query, migration, procedure, trigger, view, script (default: query).
+    pub block_type: Option<String>,
+    /// Page id or name (default: the first page).
+    pub page: Option<String>,
+    /// Canvas x position (default: next free slot of the grid). Give x and y together.
+    pub x: Option<f64>,
+    /// Canvas y position.
+    pub y: Option<f64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct UpdateBlockArgs {
+    /// Project name or .graft path.
+    pub project: String,
+    /// Block id (from list_blocks).
+    pub block_id: String,
+    /// New title (unchanged if omitted).
+    pub title: Option<String>,
+    /// New SQL (unchanged if omitted).
+    pub sql: Option<String>,
+    /// New block type (unchanged if omitted).
+    pub block_type: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct GraftServer {
     roots: Roots,
+    /// When true, the block tools refuse to write `.graft` files.
+    read_only: bool,
+    /// Serializes block edits: tool calls run concurrently, and two
+    /// read-modify-write cycles on one file would otherwise lose an edit.
+    edit_lock: Arc<Mutex<()>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -124,11 +182,23 @@ fn uri_segment(name: &str) -> String {
 }
 
 impl GraftServer {
-    pub fn new(roots: Roots) -> Self {
+    pub fn new(roots: Roots, read_only: bool) -> Self {
         Self {
             roots,
+            read_only,
+            edit_lock: Arc::new(Mutex::new(())),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Resolve a project for editing: refused in `--read-only` mode. The
+    /// returned guard must be held until the project is saved.
+    async fn editable(&self, project: &str) -> Result<(MutexGuard<'_, ()>, Project), String> {
+        if self.read_only {
+            return Err(READ_ONLY_ERROR.into());
+        }
+        let guard = self.edit_lock.lock().await;
+        Ok((guard, self.roots.resolve(project)?))
     }
 
     async fn run_sql(&self, project: &Project, sql: &str, max_rows: Option<usize>) -> Result<String, String> {
@@ -258,6 +328,53 @@ impl GraftServer {
             .ok_or_else(|| format!("no SQL block {:?} in project {:?}", args.block_id, project.name()))?;
         self.run_sql(&project, &block.block.sql, args.max_rows).await
     }
+
+    #[tool(description = "Show SQLite's query plan (EXPLAIN QUERY PLAN) for a statement, read-only, with {{favorite}} references expanded. Use it to check index usage before suggesting a query or migration.")]
+    async fn explain_query(&self, Parameters(args): Parameters<ExplainArgs>) -> Result<String, String> {
+        let project = self.roots.resolve(&args.project)?;
+        let sql = args.sql.trim().trim_end_matches(';');
+        self.run_sql(&project, &format!("EXPLAIN QUERY PLAN {sql}"), None).await
+    }
+
+    #[tool(description = "Add a SQL block to a project's canvas (writes the .graft file, not the database). Returns the new block with its id. Prefer this to running writes: the user reviews and runs the block.")]
+    async fn create_block(&self, Parameters(args): Parameters<CreateBlockArgs>) -> Result<String, String> {
+        let (_guard, mut project) = self.editable(&args.project).await?;
+        let position = match (args.x, args.y) {
+            (Some(x), Some(y)) => Some((x, y)),
+            (None, None) => None,
+            _ => return Err("give both x and y, or neither".into()),
+        };
+        let block = NewBlock {
+            title: args.title,
+            block_type: args.block_type.unwrap_or_else(|| BLOCK_TYPES[0].into()),
+            sql: args.sql,
+            position,
+        };
+        let created = project.create_block(args.page.as_deref(), block)?;
+        project.save()?;
+        to_json(&created)
+    }
+
+    #[tool(description = "Change the title, SQL and/or block type of a SQL block (writes the .graft file). Omitted fields are left unchanged.")]
+    async fn update_block(&self, Parameters(args): Parameters<UpdateBlockArgs>) -> Result<String, String> {
+        let (_guard, mut project) = self.editable(&args.project).await?;
+        let patch = BlockPatch {
+            title: args.title,
+            block_type: args.block_type,
+            sql: args.sql,
+        };
+        let updated = project.update_block(&args.block_id, patch)?;
+        project.save()?;
+        to_json(&updated)
+    }
+
+    #[tool(description = "Delete a block from a project's canvas (writes the .graft file). A SQL block's linked result block is deleted with it. Returns the removed ids.")]
+    async fn delete_block(&self, Parameters(args): Parameters<BlockArgs>) -> Result<String, String> {
+        let (_guard, mut project) = self.editable(&args.project).await?;
+        let removed = project.delete_block(&args.block_id)?;
+        project.save()?;
+        to_json(&json!({ "removed": removed }))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -309,8 +426,10 @@ mod tests {
     use super::*;
     use std::fs;
 
-    async fn fixture() -> (PathBuf, GraftServer) {
-        let root = std::env::temp_dir().join(format!("graft-mcp-srv-{}", std::process::id()));
+    /// A project "shop" (3 users, one block using a favorite) in its own
+    /// directory — `tag` keeps parallel tests apart.
+    async fn fixture(tag: &str, read_only: bool) -> (PathBuf, GraftServer) {
+        let root = std::env::temp_dir().join(format!("graft-mcp-srv-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let db_path = root.join("shop.db");
@@ -330,12 +449,108 @@ mod tests {
             ],"edges":[]}]
         });
         fs::write(root.join("shop.graft"), project.to_string()).unwrap();
-        (root.clone(), GraftServer::new(Roots::new(vec![root])))
+        (root.clone(), GraftServer::new(Roots::new(vec![root]), read_only))
+    }
+
+    fn parse(out: Result<String, String>) -> Value {
+        serde_json::from_str(&out.unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn edits_blocks_in_the_graft_file_only() {
+        let (root, server) = fixture("edit", false).await;
+        let project = || "shop".to_string();
+
+        let created = parse(
+            server
+                .create_block(Parameters(CreateBlockArgs {
+                    project: project(),
+                    title: "Names".into(),
+                    sql: "SELECT name FROM users ORDER BY id".into(),
+                    block_type: None,
+                    page: Some("Main".into()),
+                    x: None,
+                    y: None,
+                }))
+                .await,
+        );
+        let id = created["id"].as_str().unwrap().to_string();
+        assert_eq!(created["blockType"], "query");
+
+        let ran = parse(
+            server
+                .run_block(Parameters(RunBlockArgs { project: project(), block_id: id.clone(), max_rows: None }))
+                .await,
+        );
+        assert_eq!(ran["rows"][0][0], "ada", "the new block is runnable straight away");
+
+        let updated = parse(
+            server
+                .update_block(Parameters(UpdateBlockArgs {
+                    project: project(),
+                    block_id: id.clone(),
+                    title: None,
+                    sql: Some("SELECT 1".into()),
+                    block_type: Some("script".into()),
+                }))
+                .await,
+        );
+        assert_eq!((updated["title"].as_str(), updated["sql"].as_str()), (Some("Names"), Some("SELECT 1")));
+
+        let removed = parse(
+            server
+                .delete_block(Parameters(BlockArgs { project: project(), block_id: id.clone() }))
+                .await,
+        );
+        assert_eq!(removed["removed"][0], id.as_str());
+        let blocks = parse(server.list_blocks(Parameters(ListBlocksArgs { project: project(), page: None })).await);
+        assert_eq!(blocks.as_array().unwrap().len(), 1);
+
+        let plan = parse(
+            server
+                .explain_query(Parameters(ExplainArgs { project: project(), sql: "SELECT * FROM users WHERE id = 1;".into() }))
+                .await,
+        );
+        assert!(plan["columns"].as_array().unwrap().iter().any(|c| c == "detail"));
+
+        let count = db::execute_sql(&root.join("shop.db").to_string_lossy(), "SELECT count(*) FROM users", None, OpenOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(count.rows[0][0], 3, "the database is never written");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn read_only_mode_refuses_block_edits() {
+        let (root, server) = fixture("ro", true).await;
+        let before = fs::read_to_string(root.join("shop.graft")).unwrap();
+        let err = server
+            .update_block(Parameters(UpdateBlockArgs {
+                project: "shop".into(),
+                block_id: "b1".into(),
+                title: Some("x".into()),
+                sql: None,
+                block_type: None,
+            }))
+            .await
+            .unwrap_err();
+        assert!(err.contains("--read-only"));
+        assert!(server
+            .delete_block(Parameters(BlockArgs { project: "shop".into(), block_id: "b1".into() }))
+            .await
+            .is_err());
+        assert_eq!(fs::read_to_string(root.join("shop.graft")).unwrap(), before);
+        // Reading still works.
+        assert!(server
+            .explain_query(Parameters(ExplainArgs { project: "shop".into(), sql: "SELECT 1".into() }))
+            .await
+            .is_ok());
+        fs::remove_dir_all(&root).ok();
     }
 
     #[tokio::test]
     async fn tools_read_but_never_write() {
-        let (root, server) = fixture().await;
+        let (root, server) = fixture("read", false).await;
         let project = || "shop".to_string();
 
         let listed: Value = serde_json::from_str(&server.list_projects().await.unwrap()).unwrap();

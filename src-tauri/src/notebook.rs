@@ -13,6 +13,8 @@ use graft_core::files::{self, ProjectPaths};
 use graft_core::scope::FileScope;
 use tauri::State;
 
+use crate::watch::ProjectWatch;
+
 /// Write UTF-8 text (atomically) to a path chosen in the export dialog.
 #[tauri::command]
 pub fn write_text_file(
@@ -29,16 +31,28 @@ pub fn read_text_file(scope: State<'_, FileScope>, path: String) -> Result<Strin
     files::read_granted(&scope, Path::new(&path))
 }
 
-/// Write notebook JSON (atomically) to a `.graft` file.
+/// Write notebook JSON (atomically) to a `.graft` file. The contents are
+/// remembered so the project watcher does not mistake this save for an
+/// external change.
 #[tauri::command]
-pub fn save_notebook(path: String, contents: String) -> Result<(), String> {
-    files::save_project_file(Path::new(&path), &contents)
+pub fn save_notebook(
+    watch: State<'_, ProjectWatch>,
+    path: String,
+    contents: String,
+) -> Result<(), String> {
+    let path = Path::new(&path);
+    files::save_project_file(path, &contents)?;
+    watch.remember(path, &contents);
+    Ok(())
 }
 
-/// Read notebook JSON from a `.graft` file.
+/// Read notebook JSON from a `.graft` file (remembered, like a save).
 #[tauri::command]
-pub fn load_notebook(path: String) -> Result<String, String> {
-    files::load_project_file(Path::new(&path))
+pub fn load_notebook(watch: State<'_, ProjectWatch>, path: String) -> Result<String, String> {
+    let path = Path::new(&path);
+    let contents = files::load_project_file(path)?;
+    watch.remember(path, &contents);
+    Ok(contents)
 }
 
 /// Default directory for new projects: `<Documents|Home>/Graft`, created if missing.

@@ -1,6 +1,7 @@
 mod db;
 mod dialogs;
 mod notebook;
+mod watch;
 
 /// The session file scope lives in `graft-core`; re-exported so `dialogs.rs`
 /// keeps addressing it as `crate::scope`.
@@ -55,6 +56,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(FileScope::default())
         .manage(UnsavedChanges::default())
+        .manage(watch::ProjectWatch::default())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if has_unsaved_changes(window.app_handle()) {
@@ -82,6 +84,7 @@ pub fn run() {
             dialogs::pick_export_file,
             dialogs::confirm_dialog,
             set_unsaved_changes,
+            watch::watch_project,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

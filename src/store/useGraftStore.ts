@@ -16,11 +16,13 @@ import {
   pickImportFile,
   pickProjectFile,
   setUnsavedChanges,
+  watchProject,
 } from "../native";
 import { insertIntoEditor } from "../canvas/editorRegistry";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
 import { quoteIdent } from "../sqlFormat";
+import { resolveFrom } from "../paths";
 import type {
   BlockType,
   ChartConfig,
@@ -196,6 +198,9 @@ interface GraftState {
     dbPathOverride?: string | null,
   ) => Promise<boolean>;
   openProjectByPath: (projectPath: string) => Promise<void>;
+  /** Re-read the open project after it changed on disk (e.g. edited by
+   *  Claude). Asks first when that would discard unsaved changes. */
+  reloadFromDisk: () => Promise<void>;
   openProjectFromDialog: () => Promise<void>;
   removeRecent: (projectPath: string) => void;
 
@@ -397,11 +402,18 @@ function serializeNodes(nodes: AnyNode[]): NotebookNode[] {
     ...(n.parentId ? { parentId: n.parentId } : {}),
     // Reset transient execution state (blocks only) so saved files stay
     // diff-friendly. Group nodes carry no execution state.
-    data:
-      n.type === "group"
-        ? n.data
-        : { ...n.data, status: "idle", result: null, error: null },
+    data: n.type === "group" ? n.data : withIdleRunState(n.data),
   })) as NotebookNode[];
+}
+
+/** Block data with its run state reset, always as the *last* three keys.
+ *  Spreading over the existing keys would keep their position, and a run
+ *  adds them in another order to a block loaded without them — the
+ *  serialized JSON (hence the unsaved-changes fingerprint) would then change
+ *  after merely running a block. */
+function withIdleRunState(data: AnyNode["data"]) {
+  const { status: _status, result: _result, error: _error, ...rest } = data;
+  return { ...rest, status: "idle", result: null, error: null };
 }
 
 function serializeEdges(edges: Edge[]): NotebookEdge[] {
@@ -519,6 +531,89 @@ export function hasUnsavedChanges(state: GraftState): boolean {
 function markSaved(get: () => GraftState, set: (partial: Partial<GraftState>) => void) {
   savedFingerprint = fingerprint(get());
   set({ dirty: false });
+}
+
+/** The database file to open: `dbPath` as stored in the project, resolved
+ *  against the project's directory when relative (the backend would resolve
+ *  it against the app's working directory instead — and create a stray empty
+ *  database there). */
+function databasePath(state: GraftState): string | null {
+  const { dbPath, projectPath } = state;
+  if (!dbPath || !projectPath) return dbPath;
+  return resolveFrom(projectPath, dbPath);
+}
+
+/** Read and parse a project file into its pages. */
+async function readProjectFile(path: string): Promise<{ file: NotebookFile; pages: Page[] }> {
+  const contents = await invoke<string>("load_notebook", { path });
+  const file = JSON.parse(contents) as NotebookFile;
+  return { file, pages: pagesFromFile(file) };
+}
+
+/** Follow external edits of the project file (logged, never fatal: the app
+ *  works without the watch, it just won't notice outside changes). */
+function startWatching(projectPath: string) {
+  watchProject(projectPath).catch((err) => console.error("watch_project:", err));
+}
+
+/** Keep run state (status / result / error) on reloaded SQL blocks whose SQL
+ *  did not change, so reloading after an outside edit does not wipe results. */
+function carryRunState(previous: Page[], next: Page[]): Page[] {
+  const old = new Map<string, AnyNode>();
+  for (const page of previous) for (const n of page.nodes) old.set(n.id, n);
+  return next.map((page) => ({
+    ...page,
+    nodes: page.nodes.map((n) => {
+      const prev = old.get(n.id);
+      if (!prev || !isSqlNode(n) || !isSqlNode(prev) || prev.data.sql !== n.data.sql) return n;
+      const { status, result, error } = prev.data;
+      return { ...n, data: { ...n.data, status, result, error } };
+    }),
+  }));
+}
+
+let reloadInFlight = false;
+let reloadAgain = false;
+
+/** Body of `reloadFromDisk`: confirm if needed, then re-read the file while
+ *  keeping the active page, the focus and unchanged blocks' results. */
+async function reloadProject(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+) {
+  const { projectPath } = get();
+  if (!projectPath) return;
+  if (hasUnsavedChanges(get())) {
+    const name = get().projectName ?? "The project";
+    const reload = await confirmDialog(
+      "Project changed on disk",
+      `"${name}" was modified outside Graft (for example by Claude). ` +
+        "Reload it and discard your unsaved changes?",
+      "Reload",
+    );
+    // Kept: the next save will overwrite the outside edit, by choice.
+    if (!reload) return;
+  }
+  // The project may have been switched while the dialog was open.
+  if (get().projectPath !== projectPath) return;
+  try {
+    const { file, pages: fresh } = await readProjectFile(projectPath);
+    const pages = carryRunState(commitActivePage(get()), fresh);
+    const active = pages.find((p) => p.id === get().activePageId) ?? pages[0];
+    const focused = get().focusedBlockId;
+    set({
+      projectName: file.name ?? get().projectName,
+      pages,
+      activePageId: active.id,
+      nodes: active.nodes,
+      edges: active.edges,
+      snippets: file.snippets ?? [],
+      focusedBlockId: active.nodes.some((n) => n.id === focused) ? focused : null,
+    });
+    markSaved(get, set);
+  } catch (err) {
+    console.error("Failed to reload project:", err);
+  }
 }
 
 /** If unsaved changes would be lost, ask the user. True means "go ahead". */
@@ -666,6 +761,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       contents: JSON.stringify(serializeNotebook(get()), null, 2),
     });
     markSaved(get, set);
+    startWatching(paths.projectPath);
     touchRecent(get, set, {
       name,
       projectPath: paths.projectPath,
@@ -678,9 +774,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   openProjectByPath: async (projectPath) => {
     if (!(await confirmDiscard(get()))) return;
     try {
-      const contents = await invoke<string>("load_notebook", { path: projectPath });
-      const file = JSON.parse(contents) as NotebookFile;
-      const pages = pagesFromFile(file);
+      const { file, pages } = await readProjectFile(projectPath);
       const active = pages[0];
       const name = file.name ?? "untitled";
       const dbType = file.dbType ?? "sqlite";
@@ -703,6 +797,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         focusedBlockId: null,
       });
       markSaved(get, set);
+      startWatching(projectPath);
       touchRecent(get, set, { name, projectPath, dbType, dbPath });
       void get().refreshSchema();
     } catch (err) {
@@ -713,13 +808,32 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     }
   },
 
+  reloadFromDisk: async () => {
+    // One reload at a time: a change arriving while the confirmation dialog
+    // is open is handled once that reload is done, not by a second dialog.
+    if (reloadInFlight) {
+      reloadAgain = true;
+      return;
+    }
+    reloadInFlight = true;
+    try {
+      await reloadProject(get, set);
+    } finally {
+      reloadInFlight = false;
+    }
+    if (reloadAgain) {
+      reloadAgain = false;
+      await get().reloadFromDisk();
+    }
+  },
+
   openProjectFromDialog: async () => {
     const path = await pickProjectFile();
     if (path) await get().openProjectByPath(path);
   },
 
   refreshSchema: async () => {
-    const { dbPath } = get();
+    const dbPath = databasePath(get());
     if (!dbPath) {
       set({ schema: {}, dbSchema: [] });
       return;
@@ -1028,7 +1142,8 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   setFocusedBlock: (id) => set({ focusedBlockId: id }),
 
   runBlock: async (id) => {
-    const { dbPath, nodes } = get();
+    const { nodes } = get();
+    const dbPath = databasePath(get());
     const node = nodes.find((n) => n.id === id);
     if (!node || !isSqlNode(node)) return;
 

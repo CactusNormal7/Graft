@@ -8,6 +8,7 @@ import { StatusBar } from "./components/StatusBar";
 import { PageTabs } from "./components/PageTabs";
 import { CommandPalette } from "./components/CommandPalette";
 import { GraftCanvas } from "./canvas/GraftCanvas";
+import { onProjectFileChanged } from "./native";
 
 function App() {
   const view = useGraftStore((s) => s.view);
@@ -25,6 +26,18 @@ function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [view, saveNotebook]);
+
+  // Reload the open project when its file changes outside the app (e.g.
+  // Claude editing blocks through graft-mcp). One listener for the app's life.
+  useEffect(() => {
+    const unlisten = onProjectFileChanged((path) => {
+      const state = useGraftStore.getState();
+      if (path === state.projectPath) void state.reloadFromDisk();
+    });
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, []);
 
   if (view === "home") {
     return <HomeScreen />;

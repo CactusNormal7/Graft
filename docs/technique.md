@@ -160,22 +160,23 @@ Graft/
 │   │       ├── db.rs         # SQLite : execute_sql, introspect_schema, OpenOptions { read_only } + tests
 │   │       ├── files.rs      # E/S fichiers (atomique, .graft only / chemins accordés), chemins projet + tests
 │   │       ├── scope.rs      # FileScope : chemins accordés pour la session + tests
-│   │       ├── notebook.rs   # modèle typé du .graft (lecture v1–v5, round-trip sans perte) + tests
+│   │       ├── notebook.rs   # modèle typé du .graft (lecture v1–v5, round-trip sans perte, édition de blocs) + tests
 │   │       └── snippets.rs   # expand_snippets / to_snippet_name (port Rust de src/store/snippets.ts) + tests
-│   └── graft-mcp/            # serveur MCP stdio `graft-mcp` (lecture seule)
+│   └── graft-mcp/            # serveur MCP stdio `graft-mcp` (base en lecture seule, édition de blocs)
 │       └── src/
-│           ├── main.rs       # args (--root), GRAFT_PROJECT_DIRS, transport stdio
+│           ├── main.rs       # args (--root, --read-only), GRAFT_PROJECT_DIRS / GRAFT_MCP_READ_ONLY, stdio
 │           ├── projects.rs   # découverte des .graft sous les racines + résolution nom/chemin + tests
 │           └── server.rs     # tools + resources MCP (rmcp) + tests
 └── src-tauri/                # backend Rust (Tauri) — fines enveloppes autour de graft-core
-    ├── Cargo.toml            # deps Rust (tauri, plugins, graft-core)
+    ├── Cargo.toml            # deps Rust (tauri, plugins, graft-core, notify-debouncer-mini)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
     ├── capabilities/default.json  # permissions du webview : `core:default` uniquement
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
         ├── db.rs             # commandes execute_sql / introspect_schema → graft_core::db
-        ├── notebook.rs       # commandes fichiers/projets → graft_core::files
+        ├── notebook.rs       # commandes fichiers/projets → graft_core::files (+ mémorise le contenu pour watch.rs)
+        ├── watch.rs          # surveillance du .graft ouvert → événement `project-file-changed` + tests
         └── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
 ```
 
@@ -266,6 +267,34 @@ oui.
 - **⌘S / Ctrl+S** sauvegarde (écouteur global dans `App.tsx`, actif sur le
   canvas, y compris depuis un éditeur).
 
+### Surveillance du projet ouvert (modifications externes)
+Le `.graft` ouvert peut être modifié hors de l'app — typiquement par Claude via
+`graft-mcp` (`create_block`/`update_block`/`delete_block`). Sans surveillance,
+le prochain ⌘S de l'app écraserait ces modifications.
+
+- **Backend** (`src-tauri/src/watch.rs`, crate `notify-debouncer-mini`) : la
+  commande `watch_project(path)` (appelée après création/ouverture, remplace la
+  surveillance précédente) surveille le **dossier parent** — l'écriture atomique
+  remplace le fichier par `rename`, un watch posé sur le fichier lui-même serait
+  perdu — en filtrant sur le nom du fichier, avec un debounce de 300 ms.
+- **Auto-écritures ignorées** : `save_notebook` et `load_notebook` mémorisent le
+  contenu qu'ils viennent d'écrire/lire (`ProjectWatch::remember`). Sur
+  événement, le backend relit le fichier et n'émet `project-file-changed
+  { path }` que si le contenu **diffère** de ce dernier contenu connu (une
+  rafale d'événements pour un même changement n'est signalée qu'une fois).
+- **Frontend** : `App.tsx` écoute l'événement (`onProjectFileChanged`,
+  `src/native.ts` — `listen` est couvert par `core:default`) et appelle
+  `store.reloadFromDisk()` si le chemin est celui du projet ouvert :
+  - **pas de modifications non sauvegardées** → rechargement silencieux ;
+  - **modifications non sauvegardées** → confirmation native « Project changed
+    on disk » ; refus → l'état courant est gardé (le prochain ⌘S écrasera la
+    modification externe, par choix explicite).
+  - Le rechargement conserve la **page active**, le **bloc focalisé** s'il
+    existe encore et le **résultat** des blocs dont le SQL n'a pas changé
+    (`carryRunState`) ; le schéma en mémoire (live) n'est pas remplacé.
+  - Un seul rechargement à la fois (`reloadInFlight`) : un changement arrivé
+    pendant le dialogue est traité ensuite, sans second dialogue.
+
 ### Projets récents
 Liste persistée dans **`localStorage`** (`graft.recentProjects`, max 12) :
 `{ name, projectPath, dbType, dbPath, modifiedAt }`. Mise à jour (remontée en tête)
@@ -315,6 +344,7 @@ clic, supprimable (✕).
 | `pick_export_file` | `(default_name: String) -> Result<Option<String>, String>` | dialogue export `.sql` ; **accorde l'écriture** du chemin choisi |
 | `confirm_dialog` | `(title, message, ok_label) -> Result<bool, String>` | confirmation native OK/Annuler |
 | `set_unsaved_changes` | `(dirty: bool)` | reflète l'état « non sauvegardé » pour la garde fermeture/quit |
+| `watch_project` | `(path: String) -> Result<(), String>` | surveille le `.graft` ouvert ; émet `project-file-changed { path }` sur modification externe |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
@@ -368,7 +398,7 @@ unique « Page 1 » (`pagesFromFile`). Les nœuds ont la même forme qu'avant.
   "version": 4,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages (rétro-compatible en lecture)
   "name": "analytics",
   "dbType": "sqlite",                      // sqlite | postgres | mysql
-  "dbPath": "/chemin/vers/base.sqlite",   // ou null
+  "dbPath": "/chemin/vers/base.sqlite",   // ou null ; relatif = relatif au dossier du .graft
   "pages": [{ "id": "page-...", "name": "Page 1", "nodes": [
     {
       "id": "block-...",
@@ -411,6 +441,19 @@ unique « Page 1 » (`pagesFromFile`). Les nœuds ont la même forme qu'avant.
   ], "edges": [ { "id": "...", "source": "block-a", "target": "block-b" } ] }]
 }
 ```
+
+**Chemin de la base** — l'app écrit un `dbPath` absolu, mais un chemin
+**relatif** (fichier écrit à la main, projet déplacé avec sa base) est résolu
+par rapport au **dossier du `.graft`** (`databasePath()` dans le store,
+`resolveFrom` dans `src/paths.ts`), comme le fait `graft-mcp`. Le fichier
+garde la valeur telle quelle. Sans cela, le backend le résolvait par rapport à
+son répertoire de travail et y créait une base vide.
+
+**État d'exécution à la sauvegarde** — `status`/`result`/`error` sont
+remis à zéro et toujours placés **en dernier** dans `data`
+(`withIdleRunState`) : l'empreinte « non sauvegardé » compare du JSON, donc
+sensible à l'ordre des clés ; sans cela, exécuter un bloc chargé sans ces clés
+le marquait modifié.
 
 **Dimensions par défaut** — tout nœud reçoit une **largeur et une hauteur
 explicites** à la création (bloc 520×300, bloc résultat 640×360, groupe
@@ -639,7 +682,7 @@ travailler *dans* un projet Graft — lire le schéma, lire/écrire des blocs,
 exécuter des requêtes, proposer des migrations — depuis Claude Desktop, Claude
 Code ou claude.ai. Le véhicule standard est le **Model Context Protocol (MCP)**.
 
-### Livré : `graft-mcp` (stdio, lecture seule, SQLite)
+### Livré : `graft-mcp` (stdio, SQLite — base en lecture seule, édition de blocs)
 
 Binaire `crates/graft-mcp`, SDK officiel **`rmcp`** (transport stdio), bâti sur
 `graft-core`. Fonctionne **sans l'app ouverte**, directement sur les fichiers.
@@ -651,14 +694,25 @@ Binaire `crates/graft-mcp`, SDK officiel **`rmcp`** (transport stdio), bâti sur
   (liste de chemins, séparateur de l'OS). Un projet se désigne par son **nom**
   ou le **chemin** de son `.graft` ; un chemin hors racines est refusé, un nom
   partagé par plusieurs projets est déclaré ambigu.
-- **Lecture du `.graft`** : `graft_core::notebook` lit toutes les versions
+- **Modèle du `.graft`** : `graft_core::notebook` lit toutes les versions
   (v1–v3 à plat → une page « Page 1 », comme `pagesFromFile`) et conserve les
-  champs inconnus (`extra`) — l'app reste la seule à **écrire** le format.
+  champs inconnus (`extra`) et l'**ordre des clés** (`serde_json` avec
+  `preserve_order`) : une réécriture ne change que ce qui a été édité. Les
+  éditions (`Project::create_block` / `update_block` / `delete_block`, puis
+  `save()` atomique) reproduisent l'app : nouveau nœud identique à `newSqlNode`
+  (520×300, `status: "idle"`, id `block-<ms>-<n>`, position de
+  `staggeredPosition`), `update` ne touche que titre / type / SQL, `delete`
+  suit la cascade de `deleteBlock` (bloc résultat lié + arêtes ; un bloc
+  résultat supprimé est délié de sa source ; les groupes restent à l'app). Un
+  fichier v1–v3 reste à plat (pas de migration de version).
 - **Tools** : `list_projects`, `get_schema(project)` (introspection live, repli
   sur `dbSchema` en cache), `list_blocks(project, page?)`,
   `read_block(project, block_id)`, `run_query(project, sql, max_rows?)`,
-  `run_block(project, block_id, max_rows?)`. Les résultats sont du JSON
-  (`QueryResult`) ; une erreur revient en résultat d'outil `isError`.
+  `run_block(project, block_id, max_rows?)`, `explain_query(project, sql)`
+  (`EXPLAIN QUERY PLAN`, lecture seule) ; **édition** : `create_block(project,
+  title, sql, block_type?, page?, x?, y?)`, `update_block(project, block_id,
+  title?, sql?, block_type?)`, `delete_block(project, block_id)`. Les résultats
+  sont du JSON ; une erreur revient en résultat d'outil `isError`.
 - **Resources** : `graft://<projet>/schema` et `graft://<projet>/blocks/<id>`
   (SQL du bloc).
 - **Favoris** : `run_query`/`run_block` expansent `{{nom}}` avec
@@ -670,7 +724,13 @@ Binaire `crates/graft-mcp`, SDK officiel **`rmcp`** (transport stdio), bâti sur
   parsing du SQL. Plafond **200 lignes** par défaut (max 5000). Projets
   Postgres/MySQL refusés explicitement (v0.3). Un `dbPath` relatif est résolu
   depuis le dossier du `.graft`. stdout est réservé au protocole (logs sur
-  stderr).
+  stderr). Les tools d'édition écrivent **uniquement le `.graft`**, jamais la
+  base ; ils sont actifs par défaut et désactivés par `--read-only` (ou
+  `GRAFT_MCP_READ_ONLY=1`). Les éditions sont sérialisées par un verrou (les
+  appels de tools s'exécutent en parallèle, deux lecture-modification-écriture
+  concurrentes perdraient une édition). L'app ouverte recharge le fichier (§
+  Surveillance du projet ouvert). Les écritures SQL (DML/DDL) passent par un
+  bloc que l'utilisateur relit et exécute.
 - **Claude Code** : `.mcp.json` à la racine déclare le serveur `graft`
   (`cargo run --quiet --package graft-mcp --`). Compiler une première fois
   (`cargo build -p graft-mcp`) pour éviter un timeout au démarrage.
@@ -709,7 +769,8 @@ Binaire `crates/graft-mcp`, SDK officiel **`rmcp`** (transport stdio), bâti sur
 **Synchronisation avec l'app ouverte.** Si le serveur MCP modifie un `.graft`
 pendant que l'app l'affiche, les deux versions divergent (aujourd'hui la
 sauvegarde de l'app écraserait les changements de Claude). Étapes :
-(a) l'app **surveille** le fichier ouvert et propose de recharger / fusionne ;
+(a) ✓ l'app **surveille** le fichier ouvert et recharge (ou demande, si des
+modifications locales seraient perdues) — pas de fusion fine pour l'instant ;
 (b) plus tard, un **pont local** (socket localhost authentifié par jeton, exposé
 par l'app Tauri) auquel le serveur MCP parle quand l'app est ouverte, pour que
 les blocs créés par Claude apparaissent **en direct** sur le canvas.
@@ -727,11 +788,11 @@ les blocs créés par Claude apparaissent **en direct** sur le canvas.
   secrets vivent dans le trousseau de l'OS.
 
 **Phasage proposé :** ~~extraction de `graft-core`~~ ✓ → ~~serveur MCP stdio
-SQLite lecture seule~~ ✓ → tools d'édition de blocs (`create_block` /
-`update_block`, `generate_inserts`, `explain_query`) → surveillance de fichier
-dans l'app → écritures SQL opt-in → sidecar Tauri + « Installer dans Claude
-Desktop » → support Postgres/MySQL (v0.3) → pont live → connecteur distant si
-une brique cloud voit le jour.
+SQLite lecture seule~~ ✓ → ~~tools d'édition de blocs (`create_block` /
+`update_block` / `delete_block`, `explain_query`)~~ ✓ → ~~surveillance de
+fichier dans l'app~~ ✓ → `generate_inserts` → écritures SQL opt-in → sidecar
+Tauri + « Installer dans Claude Desktop » → support Postgres/MySQL (v0.3) →
+pont live → connecteur distant si une brique cloud voit le jour.
 
 > Distinct de l'autre direction possible — **Claude dans Graft** (panneau
 > assistant appelant l'API Claude depuis l'app) — qui peut venir en complément

@@ -25,8 +25,9 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching Rust sources and the Cargo workspace build dir
-      ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**"],
+      // 3. tell Vite to ignore watching Rust sources, the Cargo workspace build
+      //    dir, and the graphify output (rebuilt on every commit by its hook)
+      ignored: ["**/src-tauri/**", "**/crates/**", "**/target/**", "**/graphify-out/**"],
     },
   },
 

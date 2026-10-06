@@ -22,3 +22,5 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 graft-core = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
+notify-debouncer-mini = "0.7"

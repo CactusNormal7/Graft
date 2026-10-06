@@ -7,6 +7,7 @@
  * to `null` when the user cancels.
  */
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export const pickProjectFile = () => invoke<string | null>("pick_project_file");
 
@@ -29,3 +30,14 @@ export const confirmDialog = (title: string, message: string, okLabel: string) =
  *  close / app quit. */
 export const setUnsavedChanges = (dirty: boolean) =>
   invoke<void>("set_unsaved_changes", { dirty });
+
+/** Watch the open project's `.graft` file for changes made outside the app
+ *  (e.g. by Claude through `graft-mcp`). Replaces any previous watch. */
+export const watchProject = (path: string) => invoke<void>("watch_project", { path });
+
+/** Called with the project path whenever the watched file changed on disk.
+ *  The app's own saves never trigger it. */
+export const onProjectFileChanged = (
+  cb: (path: string) => void,
+): Promise<UnlistenFn> =>
+  listen<{ path: string }>("project-file-changed", (e) => cb(e.payload.path));
