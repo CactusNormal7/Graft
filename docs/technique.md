@@ -148,7 +148,8 @@ Graft/
 │       ├── ChartView.tsx     # vue chart : Recharts (bar/line/area/pie) + config
 │       ├── resultShape.ts    # détection parent→enfants d'un JOIN, rowToObject (colonnes dupliquées suffixées _2…)
 │       ├── orm.ts            # pont relationnel : résultat/JSON imbriqué → INSERT multi-tables
-│       ├── rowSql.ts         # SQL des actions par ligne (UPDATE / DELETE / dupliquer / ouvrir) sur table résolue
+│       ├── rowSql.ts         # SQL des actions par ligne / multi-lignes (UPDATE / DELETE / dupliquer / ouvrir) sur table résolue
+│       ├── rowSelection.ts   # sélection de lignes : clic, ⌘/Ctrl-clic, ⇧-clic, tout sélectionner (pur, testé)
 │       └── clipboard.ts      # copie presse-papiers
 ├── Cargo.toml                # workspace Cargo (src-tauri + crates/*), deps partagées
 ├── Cargo.lock                # lockfile du workspace
@@ -587,9 +588,30 @@ l'infobulle reste visible. La clé d'une ligne est comparée avec `sqlEquals`
 `INTEGER PRIMARY KEY` (alias de rowid, assignée par SQLite) et recopie toute
 autre clé avec un commentaire demandant de la modifier.
 
+**Sélection de lignes (`rowSelection.ts`)** — vue `table` uniquement. État
+local à `ResultTable` : `{ rows: Set<index>, anchor }`, avec des index
+**absolus** dans le résultat (la sélection survit à la pagination), vidé à
+chaque nouveau résultat. Gestes (module pur, testé) : clic = une ligne ;
+⌘-clic (macOS) / Ctrl-clic = bascule ; ⇧-clic = plage depuis l'ancre (l'ancre
+ne bouge pas, des ⇧-clics successifs redimensionnent la plage) ; ⌘⇧-clic =
+ajoute la plage. Clic droit sur une ligne de la sélection = agir sur toute la
+sélection, ailleurs = la ligne devient la sélection (`contextRow`). Le
+`.result-view` est focalisable (`tabIndex=-1`, pris au clic) : **⌘A** tout
+sélectionner, **⌘C** copie la sélection en TSV avec en-tête (champs contenant
+tab / saut de ligne / guillemet entre guillemets, à la tableur), **Échap**
+vide la sélection. Une barre `.result-selection` (au-dessus du pager) affiche
+le compte, un bouton **Actions ▾** et **Clear**. Actions multiples :
+copies JSON (tableau) / INSERT / TSV, et — avec la même cible sûre que les
+actions mono-ligne — **Open / Duplicate / Delete N rows → new block** et, sur
+une cellule, **Set <col> NULL on N rows**. Le SQL multi-lignes
+(`rowsKeyCondition`) cible les lignes par clé : `IN (…)` dédupliqué pour une
+clé simple (`OR … IS NULL` pour une clé nulle), une conjonction par ligne pour
+une clé composite ; la duplication est **un seul INSERT multi-`VALUES`**. Les
+fonctions mono-ligne sont le cas `[row]` des multi-lignes (sortie inchangée).
+
 Structure du rendu : `.sql-block__result` (colonne flex, **sans** scroll) →
 `.result-view` → `.result-view__body` (**le** conteneur scrollable) puis
-`.result-pager`. La barre de pagination est donc un frère de la zone scrollable,
+`.result-selection` (si sélection) et `.result-pager`. La barre de pagination est donc un frère de la zone scrollable,
 pas un enfant : elle reste toujours la dernière ligne du bloc et ne peut pas
 flotter par-dessus les données (un `position: sticky` s'y comportait mal dans ce
 contexte flex imbriqué).
@@ -648,6 +670,12 @@ cargo test --workspace    # tests unitaires Rust (graft-core, graft-mcp, app)
 cargo build -p graft-mcp  # compile le serveur MCP (target/debug/graft-mcp)
 ```
 
+**Messages de commit** — format **Conventional Commits** (`type(scope): sujet`,
+scopes `core` / `mcp` / `tauri` / `canvas` / `editor` / `store` / `ui`…), décrit
+dans `.github/copilot-commit-message-instructions.md`. `.vscode/settings.json`
+(versionné) le branche sur la génération de message de GitHub Copilot
+(`github.copilot.chat.commitMessageGeneration.instructions`).
+
 **Graphe de connaissance (graphify)** — le dépôt est indexé par
 [graphify](https://github.com/safishamsi/graphify) : `graphify-out/` (graphe
 `graph.json`, `GRAPH_REPORT.md`, `graph.html`) est **local et gitignoré**.
@@ -665,7 +693,7 @@ propre à chaque machine.
 
 **Tests frontend (Vitest)** — fichiers `*.test.ts` à côté du code testé,
 environnement `node`, config reprise de `vite.config.ts`. Couvrent les modules
-purs (`orm.ts`, `rowSql.ts`, `resultShape.ts`, `snippets.ts`, `sqlFormat.ts`,
+purs (`orm.ts`, `rowSql.ts`, `rowSelection.ts`, `resultShape.ts`, `snippets.ts`, `sqlFormat.ts`,
 `paths.ts`) et le store (`useGraftStore.test.ts` : suivi des modifications non
 sauvegardées et confirmation, avec `@tauri-apps/api/core` et `src/native.ts`
 remplacés par des faux via `vi.mock`). Fixtures de schéma : `src/test/schema.ts`.

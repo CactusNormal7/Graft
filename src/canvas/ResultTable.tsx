@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { ChartConfig, QueryResult, ResultView } from "../types";
 import { quoteIdent, sqlEquals, sqlLiteral } from "../sqlFormat";
 import { useGraftStore } from "../store/useGraftStore";
@@ -17,15 +17,27 @@ import {
 } from "./resultShape";
 import {
   deleteRowSql,
+  deleteRowsSql,
   duplicateRowSql,
+  duplicateRowsSql,
   isKeyColumn,
   resolveRowTarget,
   rowKeyCondition,
   selectRowSql,
+  selectRowsSql,
+  updateCellRowsSql,
   updateCellSql,
   type RowTarget,
   type RowTargetResult,
 } from "./rowSql";
+import {
+  EMPTY_SELECTION,
+  clickRow,
+  contextRow,
+  orderedRows,
+  selectAll,
+  type RowSelection,
+} from "./rowSelection";
 
 interface ResultTableProps {
   result: QueryResult;
@@ -86,6 +98,14 @@ export const ResultTable = memo(function ResultTable({
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
 
+  // Selected rows (table view), as absolute indexes so paging keeps them.
+  const [selection, setSelection] = useState<RowSelection>(EMPTY_SELECTION);
+  const viewRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setSelection(EMPTY_SELECTION);
+  }, [result]);
+  const rowsOf = (sel: RowSelection) => orderedRows(sel).map((i) => result.rows[i]);
+
   // Detect + group once per result. This keeps row *references* only — no
   // per-cell objects — so a 50k-row join stays cheap.
   const nested = useMemo(() => {
@@ -115,16 +135,65 @@ export const ResultTable = memo(function ResultTable({
   const start = clampedPage * size;
   const end = Math.min(start + size, total);
 
+  // Right-click acts on the whole selection when the row is part of it,
+  // otherwise the clicked row becomes the selection (as in a file manager).
   const openCellMenu = (e: React.MouseEvent, ctx: CellCtx) => {
     e.preventDefault();
     e.stopPropagation();
-    setMenu({ x: e.clientX, y: e.clientY, actions: cellActions(ctx, env) });
+    const next = contextRow(selection, ctx.rowIndex);
+    setSelection(next);
+    const actions =
+      next.rows.size > 1
+        ? selectionCellActions(ctx, rowsOf(next), env)
+        : cellActions(ctx, env);
+    setMenu({ x: e.clientX, y: e.clientY, actions });
   };
 
   const openRowMenu = (e: React.MouseEvent, ctx: RowCtx) => {
     e.preventDefault();
     e.stopPropagation();
-    setMenu({ x: e.clientX, y: e.clientY, actions: rowActions(ctx, env) });
+    const next = contextRow(selection, ctx.rowIndex);
+    setSelection(next);
+    const actions =
+      next.rows.size > 1 ? selectionActions(rowsOf(next), ctx.columns, env) : rowActions(ctx, env);
+    setMenu({ x: e.clientX, y: e.clientY, actions });
+  };
+
+  const onRowClick = (e: React.MouseEvent, rowIndex: number) => {
+    setSelection((s) =>
+      clickRow(s, rowIndex, { toggle: e.metaKey || e.ctrlKey, range: e.shiftKey }),
+    );
+    // Focus the result so ⌘A / ⌘C / Esc apply to it.
+    viewRef.current?.focus({ preventScroll: true });
+  };
+
+  /** Menu for the selection bar's "Actions" button. */
+  const openSelectionMenu = (e: React.MouseEvent) => {
+    const box = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const rows = rowsOf(selection);
+    const actions =
+      rows.length === 1
+        ? rowActions({ rowIndex: orderedRows(selection)[0], row: rows[0], columns: result.columns }, env)
+        : selectionActions(rows, result.columns, env);
+    setMenu({ x: box.left, y: box.bottom, actions });
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (isChart || isJson) return;
+    const mod = e.metaKey || e.ctrlKey;
+    const key = e.key.toLowerCase();
+    if (mod && key === "a") {
+      e.preventDefault();
+      e.stopPropagation();
+      setSelection(selectAll(result.rows.length));
+    } else if (mod && key === "c" && selection.rows.size > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      copy(rowsAsTsv(rowsOf(selection), result.columns, true));
+    } else if (key === "escape" && selection.rows.size > 0) {
+      e.stopPropagation();
+      setSelection(EMPTY_SELECTION);
+    }
   };
 
   const pagedFlat: QueryResult = useMemo(
@@ -161,6 +230,8 @@ export const ResultTable = memo(function ResultTable({
       <TableView
         result={pagedFlat}
         rowOffset={start}
+        selected={selection.rows}
+        onRowClick={onRowClick}
         onCellContextMenu={openCellMenu}
         onRowContextMenu={openRowMenu}
       />
@@ -172,12 +243,34 @@ export const ResultTable = memo(function ResultTable({
   // a previous, larger result must not hide rows). Never in chart view, which
   // plots the whole result.
   const showPager = !isChart && (total > DEFAULT_PAGE_SIZE || pageCount > 1);
+  const selectedCount = !isChart && !isJson ? selection.rows.size : 0;
 
   return (
-    <div className="result-view">
+    // Focusable (not tabbable) so the selection shortcuts reach it.
+    <div className="result-view" ref={viewRef} tabIndex={-1} onKeyDown={onKeyDown}>
       {/* The scrolling area is INSIDE this column, so the pager below is a
           plain flex sibling that can never drift over the content. */}
       <div className="result-view__body">{body}</div>
+      {selectedCount > 0 && (
+        <div className="result-selection nodrag">
+          <span className="result-selection__count">
+            {selectedCount} row{selectedCount > 1 ? "s" : ""} selected
+          </span>
+          <button className="btn result-pager__btn" onClick={openSelectionMenu}>
+            Actions ▾
+          </button>
+          <button
+            className="btn result-pager__btn"
+            onClick={() => setSelection(EMPTY_SELECTION)}
+            title="Clear the selection (Esc)"
+          >
+            Clear
+          </button>
+          <span className="text-muted result-selection__hint">
+            ⇧-click range · ⌘/Ctrl-click toggle · ⌘C copy
+          </span>
+        </div>
+      )}
       {showPager && (
         <div className="result-pager nodrag">
           <button
@@ -238,11 +331,15 @@ export const ResultTable = memo(function ResultTable({
 function TableView({
   result,
   rowOffset,
+  selected,
+  onRowClick,
   onCellContextMenu,
   onRowContextMenu,
 }: {
   result: QueryResult;
   rowOffset: number;
+  selected: ReadonlySet<number>;
+  onRowClick: (e: React.MouseEvent, rowIndex: number) => void;
   onCellContextMenu: (e: React.MouseEvent, ctx: CellCtx) => void;
   onRowContextMenu: (e: React.MouseEvent, ctx: RowCtx) => void;
 }) {
@@ -261,7 +358,14 @@ function TableView({
         {result.rows.map((row, i) => {
           const abs = rowOffset + i;
           return (
-            <tr key={abs}>
+            <tr
+              key={abs}
+              className={selected.has(abs) ? "is-selected" : undefined}
+              aria-selected={selected.has(abs)}
+              // Shift-click extends the row selection, not a text selection.
+              onMouseDown={(e) => e.shiftKey && e.preventDefault()}
+              onClick={(e) => onRowClick(e, abs)}
+            >
               <td
                 className="result-table__rownum"
                 onContextMenu={(e) =>
@@ -360,6 +464,18 @@ function rowAsInsert(row: Cell[], columns: string[], table: string): string {
   return `INSERT INTO ${table} (${cols}) VALUES (${vals});`;
 }
 
+/** One TSV field: quoted (spreadsheet-style) when it holds a tab, a newline
+ *  or a quote, so pasting into a spreadsheet keeps the columns aligned. */
+function tsvField(v: Cell): string {
+  const text = v === null ? "" : String(v);
+  return /[\t\n\r"]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function rowsAsTsv(rows: Cell[][], columns: string[], header: boolean): string {
+  const lines = rows.map((r) => r.map(tsvField).join("\t"));
+  return (header ? [columns.map(tsvField).join("\t"), ...lines] : lines).join("\n");
+}
+
 /** Quoted target table name, or a placeholder to fill in by hand. */
 function tableOrPlaceholder(env: ActionEnv): string {
   return env.target.ok ? quoteIdent(env.target.target.table) : "«table»";
@@ -438,10 +554,7 @@ function rowActions(ctx: RowCtx, env: ActionEnv): MenuAction[] {
       label: "Copy row as INSERT",
       onClick: () => copy(rowAsInsert(row, columns, tableOrPlaceholder(env))),
     },
-    {
-      label: "Copy row as TSV",
-      onClick: () => copy(row.map((v) => (v === null ? "" : String(v))).join("\t")),
-    },
+    { label: "Copy row as TSV", onClick: () => copy(rowsAsTsv([row], columns, false)) },
     { separator: true },
     rowAction(env, "Open row in new block", (t) => ({
       title: `Row — ${t.table}`,
@@ -457,5 +570,68 @@ function rowActions(ctx: RowCtx, env: ActionEnv): MenuAction[] {
       (t) => ({ title: `Delete row — ${t.table}`, sql: deleteRowSql(t, row, columns) }),
       true,
     ),
+  ];
+}
+
+// ============================================================================
+// Multi-row selection actions
+// ============================================================================
+const plural = (n: number) => `${n} row${n > 1 ? "s" : ""}`;
+
+/** Actions on every selected row. Writes open reviewable SQL in a new block,
+ *  like the single-row actions. */
+function selectionActions(rows: Cell[][], columns: string[], env: ActionEnv): MenuAction[] {
+  const n = plural(rows.length);
+  const table = tableOrPlaceholder(env);
+  return [
+    {
+      label: `Copy ${n} as JSON`,
+      onClick: () => copy(JSON.stringify(rows.map((r) => rowToObject(r, columns)), null, 2)),
+    },
+    {
+      label: `Copy ${n} as INSERT`,
+      onClick: () => copy(rows.map((r) => rowAsInsert(r, columns, table)).join("\n")),
+    },
+    { label: `Copy ${n} as TSV`, onClick: () => copy(rowsAsTsv(rows, columns, true)) },
+    { separator: true },
+    rowAction(env, `Open ${n} in new block`, (t) => ({
+      title: `${n} — ${t.table}`,
+      sql: selectRowsSql(t, rows, columns),
+    })),
+    rowAction(env, `Duplicate ${n} → new block`, (t) => ({
+      title: `Duplicate ${n} — ${t.table}`,
+      sql: duplicateRowsSql(t, rows, columns),
+    })),
+    rowAction(
+      env,
+      `Delete ${n} → new block`,
+      (t) => ({ title: `Delete ${n} — ${t.table}`, sql: deleteRowsSql(t, rows, columns) }),
+      true,
+    ),
+  ];
+}
+
+/** Right-click on a cell of a multi-row selection: the cell's own copies,
+ *  "Set NULL" on that column for every selected row, then the row actions. */
+function selectionCellActions(ctx: CellCtx, rows: Cell[][], env: ActionEnv): MenuAction[] {
+  const { col, colIndex, value, columns } = ctx;
+  const label = `Set ${col} NULL on ${plural(rows.length)} → new block`;
+  const isKey = env.target.ok && isKeyColumn(env.target.target, colIndex);
+  return [
+    { label: "Copy value", onClick: () => copy(value === null ? "" : String(value)), disabled: value === null },
+    { label: "Copy column name", onClick: () => copy(col) },
+    {
+      label: `Copy ${col} of ${plural(rows.length)}`,
+      onClick: () => copy(rows.map((r) => tsvField(r[colIndex])).join("\n")),
+    },
+    { separator: true },
+    isKey
+      ? { label, disabled: true, hint: "A primary-key column can't be set to NULL." }
+      : rowAction(env, label, (t) => ({
+          title: `Set ${col} NULL — ${t.table}`,
+          sql: updateCellRowsSql(t, rows, columns, colIndex, null),
+        })),
+    { separator: true },
+    ...selectionActions(rows, columns, env),
   ];
 }

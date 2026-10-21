@@ -1,0 +1,7 @@
+{
+  // GitHub Copilot "Generate commit message" (✨ in Source Control):
+  // follow Conventional Commits with this repo's scopes.
+  "github.copilot.chat.commitMessageGeneration.instructions": [
+    { "file": ".github/copilot-commit-message-instructions.md" }
+  ]
+}

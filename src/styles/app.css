@@ -788,6 +788,39 @@ button {
   background: var(--panel-2);
 }
 
+/* Row selection (click / ⇧-click / ⌘-click) — must win over stripe + hover. */
+.result-table tbody tr.is-selected td:not(.result-table__rownum),
+.result-table tbody tr.is-selected:hover td:not(.result-table__rownum) {
+  background: var(--data-selected-bg);
+}
+.result-table tbody tr.is-selected td.result-table__rownum {
+  color: var(--accent-text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* The result area takes focus for ⌘A / ⌘C / Esc — no focus ring on it. */
+.result-view:focus { outline: none; }
+
+/* Selection bar: count + actions, above the pager. */
+.result-selection {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--accent-dim);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
+}
+.result-selection__count { color: var(--accent-text); }
+.result-selection__hint {
+  margin-left: auto;
+  user-select: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------------------------------------------------------------------------
    Result — records view (one card per row, no horizontal scroll)
    --------------------------------------------------------------------------- */

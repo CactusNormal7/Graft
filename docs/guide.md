@@ -126,6 +126,21 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      et leur infobulle dit pourquoi (jointure, clé primaire non sélectionnée,
      table sans clé primaire…). Dans ce cas les copies utilisent aussi le vrai
      nom de table au lieu du placeholder `«table»`.
+   - **Sélectionner des lignes** (vue table) : **clic** sur une ligne pour la
+     sélectionner, **⌘-clic** (Ctrl-clic sous Windows) pour en ajouter / retirer
+     une, **⇧-clic** pour sélectionner toute la plage depuis la dernière ligne
+     cliquée (**⌘⇧-clic** l'ajoute à la sélection). **⌘A** sélectionne tout le
+     résultat, **⌘C** copie la sélection (TSV avec en-tête, à coller dans un
+     tableur), **Échap** la vide. La sélection est conservée en changeant de
+     page. Une barre « *N rows selected* » apparaît sous le résultat, avec
+     **Actions ▾** et **Clear**.
+   - **Actions sur plusieurs lignes** : clic droit sur une ligne sélectionnée
+     (ou **Actions ▾**) — copier les N lignes en JSON / INSERT / TSV, et, aux
+     mêmes conditions que les actions d'une ligne, **Open / Duplicate / Delete
+     N rows → new block** ; clic droit sur une cellule : **Set <colonne> NULL
+     on N rows → new block**. Le SQL généré cible les lignes par clé primaire
+     (`WHERE id IN (…)`) et s'ouvre dans un nouveau bloc à relire avant de
+     l'exécuter.
    - **Redimensionnement** : sélectionne un bloc, les poignées apparaissent
      sur les bords/coins ; taille persistée dans le fichier `.graft`.
 4. **Sidebar — explorateur de schéma** : les tables de la base connectée

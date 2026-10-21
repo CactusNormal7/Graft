@@ -1,5 +1,6 @@
 /**
- * SQL for row-level actions on a result (UPDATE / DELETE / duplicate / open).
+ * SQL for row-level actions on a result (UPDATE / DELETE / duplicate / open),
+ * for one row or a multi-row selection.
  *
  * These statements touch real data, so the target must be unambiguous: the
  * result has to map to exactly one table (every result column belongs to it)
@@ -75,14 +76,53 @@ export function rowKeyCondition(target: RowTarget, row: Cell[], columns: string[
   return target.keyIndexes.map((i) => sqlEquals(columns[i], row[i])).join(" AND ");
 }
 
+/** `WHERE` condition matching every row of `rows` by primary key: `= …` for
+ *  one row, `IN (…)` for a single-column key (`IS NULL` for null keys), one
+ *  parenthesized conjunction per row for a composite key. */
+export function rowsKeyCondition(target: RowTarget, rows: Cell[][], columns: string[]): string {
+  if (rows.length === 1) return rowKeyCondition(target, rows[0], columns);
+  if (target.keyIndexes.length === 1) {
+    const i = target.keyIndexes[0];
+    const literals = [...new Set(rows.filter((r) => r[i] !== null).map((r) => sqlLiteral(r[i])))];
+    const parts: string[] = [];
+    if (literals.length === 1) parts.push(`${quoteIdent(columns[i])} = ${literals[0]}`);
+    else if (literals.length > 1) parts.push(`${quoteIdent(columns[i])} IN (${literals.join(", ")})`);
+    if (rows.some((r) => r[i] === null)) parts.push(`${quoteIdent(columns[i])} IS NULL`);
+    return parts.join(" OR ");
+  }
+  return rows.map((r) => `(${rowKeyCondition(target, r, columns)})`).join("\n   OR ");
+}
+
 export function isKeyColumn(target: RowTarget, columnIndex: number): boolean {
   return target.keyIndexes.includes(columnIndex);
 }
 
 const REVIEW = "-- Generated from a result row: review before running.\n";
 
+const reviewHeader = (rows: Cell[][]) =>
+  rows.length === 1 ? REVIEW : `-- Generated from ${rows.length} result rows: review before running.\n`;
+
+export function selectRowsSql(target: RowTarget, rows: Cell[][], columns: string[]): string {
+  return `SELECT * FROM ${quoteIdent(target.table)} WHERE ${rowsKeyCondition(target, rows, columns)};`;
+}
+
 export function selectRowSql(target: RowTarget, row: Cell[], columns: string[]): string {
-  return `SELECT * FROM ${quoteIdent(target.table)} WHERE ${rowKeyCondition(target, row, columns)};`;
+  return selectRowsSql(target, [row], columns);
+}
+
+/** Set one column to `value` on every row of `rows`. */
+export function updateCellRowsSql(
+  target: RowTarget,
+  rows: Cell[][],
+  columns: string[],
+  columnIndex: number,
+  value: Cell,
+): string {
+  return (
+    reviewHeader(rows) +
+    `UPDATE ${quoteIdent(target.table)} SET ${quoteIdent(columns[columnIndex])} = ${sqlLiteral(value)}` +
+    ` WHERE ${rowsKeyCondition(target, rows, columns)};\n`
+  );
 }
 
 export function updateCellSql(
@@ -92,34 +132,40 @@ export function updateCellSql(
   columnIndex: number,
   value: Cell,
 ): string {
+  return updateCellRowsSql(target, [row], columns, columnIndex, value);
+}
+
+export function deleteRowsSql(target: RowTarget, rows: Cell[][], columns: string[]): string {
   return (
-    REVIEW +
-    `UPDATE ${quoteIdent(target.table)} SET ${quoteIdent(columns[columnIndex])} = ${sqlLiteral(value)}` +
-    ` WHERE ${rowKeyCondition(target, row, columns)};\n`
+    reviewHeader(rows) +
+    `DELETE FROM ${quoteIdent(target.table)} WHERE ${rowsKeyCondition(target, rows, columns)};\n`
   );
 }
 
 export function deleteRowSql(target: RowTarget, row: Cell[], columns: string[]): string {
-  return (
-    REVIEW +
-    `DELETE FROM ${quoteIdent(target.table)} WHERE ${rowKeyCondition(target, row, columns)};\n`
-  );
+  return deleteRowsSql(target, [row], columns);
 }
 
-/** INSERT of a copy of `row`. A generated key is left out so the database
- *  assigns a fresh one; any other key is kept and must be edited by hand. */
-export function duplicateRowSql(target: RowTarget, row: Cell[], columns: string[]): string {
+/** INSERT of a copy of each row (one multi-row INSERT). A generated key is
+ *  left out so the database assigns fresh ones; any other key is kept and must
+ *  be edited by hand. */
+export function duplicateRowsSql(target: RowTarget, rows: Cell[][], columns: string[]): string {
   const keep = columns
     .map((_, i) => i)
     .filter((i) => !(target.generatedKey && isKeyColumn(target, i)));
   const note = target.generatedKey
     ? ""
     : "-- The primary key is copied as-is: change it before running.\n";
+  const table = quoteIdent(target.table);
+  if (keep.length === 0) {
+    return reviewHeader(rows) + note + rows.map(() => `INSERT INTO ${table} DEFAULT VALUES;\n`).join("");
+  }
   const cols = keep.map((i) => quoteIdent(columns[i])).join(", ");
-  const vals = keep.map((i) => sqlLiteral(row[i])).join(", ");
-  const insert =
-    keep.length === 0
-      ? `INSERT INTO ${quoteIdent(target.table)} DEFAULT VALUES;`
-      : `INSERT INTO ${quoteIdent(target.table)} (${cols}) VALUES (${vals});`;
-  return REVIEW + note + insert + "\n";
+  const tuples = rows.map((row) => `(${keep.map((i) => sqlLiteral(row[i])).join(", ")})`);
+  const values = tuples.length === 1 ? ` VALUES ${tuples[0]}` : ` VALUES\n  ${tuples.join(",\n  ")}`;
+  return reviewHeader(rows) + note + `INSERT INTO ${table} (${cols})${values};\n`;
+}
+
+export function duplicateRowSql(target: RowTarget, row: Cell[], columns: string[]): string {
+  return duplicateRowsSql(target, [row], columns);
 }

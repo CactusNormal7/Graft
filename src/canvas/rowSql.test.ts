@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   deleteRowSql,
+  deleteRowsSql,
   duplicateRowSql,
+  duplicateRowsSql,
+  rowsKeyCondition,
+  selectRowsSql,
+  updateCellRowsSql,
   resolveRowTarget,
   selectRowSql,
   updateCellSql,
@@ -78,5 +83,43 @@ describe("row statements", () => {
 
   it("matches a NULL key with IS NULL", () => {
     expect(selectRowSql(t, [null, "x"], columns)).toBe(`SELECT * FROM "users" WHERE "id" IS NULL;`);
+  });
+});
+
+describe("multi-row statements", () => {
+  const columns = ["id", "name"];
+  const t = targetOf(columns);
+  const rows = [[1, "a"], [3, "b"], [1, "dup"]];
+
+  it("matches a single-column key with IN, deduplicated, and nulls with IS NULL", () => {
+    expect(rowsKeyCondition(t, rows, columns)).toBe(`"id" IN (1, 3)`);
+    expect(rowsKeyCondition(t, [[1, "a"], [null, "b"]], columns)).toBe(`"id" = 1 OR "id" IS NULL`);
+    expect(selectRowsSql(t, rows, columns)).toBe(`SELECT * FROM "users" WHERE "id" IN (1, 3);`);
+  });
+
+  it("matches a composite key row by row", () => {
+    const schema = [table("m", [col("a", "TEXT", true), col("b", "TEXT", true), col("v")])];
+    const cols = ["a", "b", "v"];
+    const ct = targetOf(cols, schema);
+    expect(rowsKeyCondition(ct, [["x", "1", 0], ["y", "2", 0]], cols)).toBe(
+      `("a" = 'x' AND "b" = '1')\n   OR ("a" = 'y' AND "b" = '2')`,
+    );
+  });
+
+  it("updates, deletes and duplicates every selected row in one statement", () => {
+    expect(updateCellRowsSql(t, rows, columns, 1, null)).toContain(
+      `UPDATE "users" SET "name" = NULL WHERE "id" IN (1, 3);`,
+    );
+    const del = deleteRowsSql(t, rows, columns);
+    expect(del).toContain("3 result rows");
+    expect(del).toContain(`DELETE FROM "users" WHERE "id" IN (1, 3);`);
+    expect(duplicateRowsSql(t, [[1, "a"], [2, "b"]], columns)).toContain(
+      `INSERT INTO "users" ("name") VALUES\n  ('a'),\n  ('b');`,
+    );
+  });
+
+  it("keeps single-row output unchanged", () => {
+    expect(deleteRowsSql(t, [[3, "x"]], columns)).toBe(deleteRowSql(t, [3, "x"], columns));
+    expect(duplicateRowsSql(t, [[3, "x"]], columns)).toBe(duplicateRowSql(t, [3, "x"], columns));
   });
 });
