@@ -7,8 +7,11 @@
 //! command the ⌘K palette would. Accelerators use `CmdOrCtrl`, i.e. Cmd on
 //! macOS and Ctrl on Windows.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use tauri::menu::{Menu, MenuItem, Submenu, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Event carrying the id of the clicked menu item to the webview.
 pub const MENU_EVENT: &str = "menu-action";
@@ -76,6 +79,10 @@ pub const ALL_ITEMS: &[&[CommandItem]] = &[
     VIEW_SCHEMA,
 ];
 
+/// Handles of the custom items, so their enabled state can follow the app's
+/// context (`set_menu_states`).
+pub struct CommandMenuItems<R: Runtime>(Mutex<HashMap<String, MenuItem<R>>>);
+
 fn is_command_id(id: &str) -> bool {
     ALL_ITEMS.iter().flat_map(|items| items.iter()).any(|item| item.id == id)
 }
@@ -89,6 +96,9 @@ fn with_items<'a, R: Runtime>(
     for entry in items {
         let menu_item = MenuItem::with_id(app, entry.id, entry.label, true, entry.accelerator)?;
         builder = builder.item(&menu_item);
+        if let Some(handles) = app.try_state::<CommandMenuItems<R>>() {
+            handles.0.lock().unwrap_or_else(|e| e.into_inner()).insert(entry.id.to_string(), menu_item);
+        }
     }
     Ok(builder)
 }
@@ -169,6 +179,7 @@ fn window_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
 
 /// Build the whole menu bar for the current platform.
 pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    app.manage(CommandMenuItems::<R>(Mutex::new(HashMap::new())));
     let menu = Menu::new(app)?;
     #[cfg(target_os = "macos")]
     menu.append(&app_menu(app)?)?;
@@ -177,6 +188,23 @@ pub fn build<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         menu.append(submenu)?;
     }
     Ok(menu)
+}
+
+/// Grey out / enable custom items to match what the app can do right now
+/// (e.g. canvas commands on the home screen). Unknown ids are ignored.
+#[tauri::command]
+pub fn set_menu_states<R: Runtime>(
+    app: AppHandle<R>,
+    states: HashMap<String, bool>,
+) -> Result<(), String> {
+    let handles = app.state::<CommandMenuItems<R>>();
+    let items = handles.0.lock().unwrap_or_else(|e| e.into_inner());
+    for (id, enabled) in states {
+        if let Some(item) = items.get(&id) {
+            item.set_enabled(enabled).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 /// Forward a click on a custom item to the webview; predefined items (copy,

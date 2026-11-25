@@ -92,6 +92,7 @@ pub fn run() {
             dialogs::pick_export_file,
             dialogs::confirm_dialog,
             set_unsaved_changes,
+            menu::set_menu_states,
             registry_commands::register_project,
             claude_desktop::install_claude_desktop,
             registry_commands::get_mcp_writes,

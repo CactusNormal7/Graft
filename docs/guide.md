@@ -278,7 +278,7 @@ sur Windows). Raccourcis : **Cmd** sur macOS, **Ctrl** sur Windows.
 
 **File ▸ New Block** crée un bloc de chaque type ; **New Group**, **New Page**,
 **Import Data File…** et **View ▸ Refresh Schema** reprennent les boutons de
-la toolbar. Les actions du canvas sont sans effet sur l'écran d'accueil.
+la toolbar. Sur l'écran d'accueil, les actions du canvas apparaissent grisées.
 
 ### Navigation sur le canvas
 - **Déplacer la vue** : glisser le fond, ou **deux doigts au trackpad** (scroll).

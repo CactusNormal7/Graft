@@ -114,7 +114,7 @@ Graft/
 │   ├── formatSql.ts          # formatage SQL (sql-formatter, dialecte du moteur, {{favoris}} préservés)
 │   ├── commands.ts           # commandes de l'app (useAppCommands) partagées palette / menus + SHORTCUTS
 │   ├── shortcuts.ts          # libellés de raccourcis par plateforme (⌘⇧F / Ctrl+Shift+F)
-│   ├── useMenuActions.ts     # exécute la commande de chaque clic de menu natif (événement `menu-action`)
+│   ├── useMenuActions.ts     # clic de menu natif → commande (événement `menu-action`) + synchro de l'état grisé
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
 │   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
@@ -502,8 +502,15 @@ Construite avec l'API Menu de Tauri 2 au démarrage (`Builder::menu(menu::build)
 - **Tests** (`cargo test menu`) : ids et accélérateurs uniques, chaque id
   existe dans `src/commands.ts`, chaque accélérateur y figure sous sa forme
   `Mod+…` (`SHORTCUTS`) pour que palette et menu affichent le même raccourci.
-- Limite : l'état grisé des éléments n'est pas synchronisé avec le contexte
-  (un élément inactif ne fait simplement rien).
+- **État grisé synchronisé** : `menu::build` garde les poignées des éléments
+  (`CommandMenuItems`) ; `useMenuActions` envoie `set_menu_states`
+  (`{ id: enabled }`, d'après `isEnabled` des commandes) au démarrage et à
+  chaque changement d'écran ou de bloc focalisé, seulement si l'état a changé.
+  Ex. : sur l'accueil, Save, New Group, Run Block… sont grisés.
+- **Course clavier atténuée** : les commandes qui lisent le texte de
+  l'éditeur (`block.run`, `block.runAll`, `sql.format` — `EDITOR_COMMANDS`)
+  attendent `EDITOR_SETTLE_MS` (60 ms) quand elles viennent du menu, le temps
+  que les frappes déjà parties vers le webview y arrivent.
 
 ### Formatage SQL
 - `src/formatSql.ts` : `formatSql(sql, dbType)` s'appuie sur **`sql-formatter`**
@@ -601,6 +608,7 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
 | `pick_import_file` | `() -> Result<Option<String>, String>` | dialogue import `.json`/`.sql` ; **accorde la lecture** du chemin choisi |
 | `pick_export_file` | `(default_name: String) -> Result<Option<String>, String>` | dialogue export `.sql` ; **accorde l'écriture** du chemin choisi |
 | `confirm_dialog` | `(title, message, ok_label) -> Result<bool, String>` | confirmation native OK/Annuler |
+| `set_menu_states` | `(states: { [id]: bool })` | grise / active les éléments du menu natif selon le contexte |
 | `set_unsaved_changes` | `(dirty: bool)` | reflète l'état « non sauvegardé » pour la garde fermeture/quit |
 | `lsp_start` | `() -> Result<bool, String>` | lance `sql-language-server` s'il est installé (idempotent) ; `false` sinon |
 | `lsp_send` | `(message: String) -> Result<(), String>` | envoie un message JSON-RPC au serveur (réponses : événement `lsp-message`) |
@@ -1182,9 +1190,11 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   **palette ⌘K**, pont ORM (INSERT multi-tables).
 - Une connexion par projet (pas encore de gestionnaire de connexions nommées
   partagées entre projets).
-- **Course clavier rare** : un accélérateur de menu (⌘↵, ⇧⌥F…) est traité par
-  l'OS avant le webview ; une frappe *immédiatement* suivie du raccourci
-  (saisie automatisée) peut exécuter le SQL d'avant cette dernière frappe.
+- **Course clavier atténuée, pas supprimée** : un accélérateur de menu (⌘↵,
+  ⇧⌥F…) est traité par l'OS avant le webview ; les commandes concernées
+  attendent 60 ms, ce qui couvre la frappe humaine, mais une saisie
+  automatisée plus lente que ce délai pourrait encore exécuter le SQL d'avant
+  la dernière frappe.
 - Les arêtes entre blocs sont dessinables mais **purement visuelles** : aucune
   sémantique d'exécution (ordre/dépendances) — liée à la question ouverte de la
   granularité des blocs.
