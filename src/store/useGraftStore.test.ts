@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // The store talks to the backend through Tauri IPC and native dialogs: replace
 // both with in-memory fakes.
 const files = new Map<string, string>();
+const stamps = new Map<string, number>();
 const passwords = new Map<string, string>();
 const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
   switch (cmd) {
@@ -10,7 +11,10 @@ const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
       return files.get(args!.path as string);
     case "save_notebook":
       files.set(args!.path as string, args!.contents as string);
+      stamps.set(args!.path as string, (stamps.get(args!.path as string) ?? 0) + 1);
       return null;
+    case "project_file_stamp":
+      return stamps.get(args!.path as string) ?? 0;
     case "introspect_schema":
       return { tables: [], triggers: [], routines: [] };
     case "register_project":
@@ -247,5 +251,71 @@ describe("table nodes", () => {
     const saved = JSON.parse(files.get("/p/t.graft")!);
     const savedTable = saved.pages[0].nodes.find((n: { type: string }) => n.type === "tableNode");
     expect(savedTable.data).toEqual({ table: "users" });
+  });
+});
+
+describe("changes made outside the app", () => {
+  beforeEach(() => confirmDialog.mockResolvedValue(true));
+  afterEach(() => confirmDialog.mockResolvedValue(false));
+
+  /** Simulate another program (graft-mcp) rewriting the project file. */
+  function editOnDisk(path: string, edit: (file: Record<string, unknown>) => void) {
+    const file = JSON.parse(files.get(path)!);
+    edit(file);
+    files.set(path, JSON.stringify(file));
+    stamps.set(path, (stamps.get(path) ?? 0) + 1);
+  }
+
+  async function answerDialog(confirmed: boolean) {
+    await vi.waitFor(() => expect(useDialogStore.getState().queue.length).toBe(1));
+    const request = useDialogStore.getState().queue[0];
+    if (request.kind !== "confirm") throw new Error("expected a confirm dialog");
+    request.resolve(confirmed);
+  }
+
+  beforeEach(async () => {
+    files.clear();
+    useDialogStore.setState({ queue: [] });
+    writeProject("/p/w.graft", "w");
+    await store.getState().openProjectByPath("/p/w.graft");
+    await store.getState().checkProjectFile(); // records the current stamp
+  });
+
+  it("offers to reload, and reloads when accepted", async () => {
+    editOnDisk("/p/w.graft", (file) => (file.name = "renamed by Claude"));
+    const check = store.getState().checkProjectFile();
+    await answerDialog(true);
+    await check;
+    expect(store.getState().projectName).toBe("renamed by Claude");
+    expect(unsaved()).toBe(false);
+
+    await store.getState().checkProjectFile();
+    expect(useDialogStore.getState().queue).toHaveLength(0);
+  });
+
+  it("asks before a save would overwrite the external change", async () => {
+    editOnDisk("/p/w.graft", (file) => (file.name = "external"));
+    const check = store.getState().checkProjectFile();
+    await answerDialog(false); // keep my version for now
+    await check;
+    store.getState().addBlock("query");
+
+    const refused = store.getState().saveNotebook();
+    await answerDialog(false);
+    await refused;
+    expect(JSON.parse(files.get("/p/w.graft")!).name).toBe("external");
+
+    const accepted = store.getState().saveNotebook();
+    await answerDialog(true);
+    await accepted;
+    expect(JSON.parse(files.get("/p/w.graft")!).name).toBe("w");
+  });
+
+  it("saves without asking when nothing changed outside", async () => {
+    store.getState().addBlock("query");
+    await store.getState().saveNotebook();
+    expect(useDialogStore.getState().queue).toHaveLength(0);
+    await store.getState().checkProjectFile();
+    expect(useDialogStore.getState().queue).toHaveLength(0);
   });
 });

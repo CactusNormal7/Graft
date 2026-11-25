@@ -79,6 +79,7 @@ pub fn run() {
             db_commands::has_connection_password,
             notebook::save_notebook,
             notebook::load_notebook,
+            notebook::project_file_stamp,
             notebook::write_text_file,
             notebook::read_text_file,
             notebook::default_project_dir,

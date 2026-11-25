@@ -381,6 +381,22 @@ oui.
 - **⌘S / Ctrl+S** sauvegarde (écouteur global dans `App.tsx`, actif sur le
   canvas, y compris depuis un éditeur).
 
+### Modifications faites hors de l'app (ex. Claude via `graft-mcp`)
+Le serveur MCP peut réécrire le `.graft` pendant que l'app l'affiche. Le store
+garde `diskContents` = le texte qu'il a lu ou écrit en dernier :
+- **Surveillance** : toutes les 2 s (`PROJECT_FILE_POLL_MS`, `App.tsx`),
+  `checkProjectFile` lit la date de modification (`project_file_stamp`, peu
+  coûteux) et ne relit le fichier que si elle a changé. Si le contenu diffère
+  de `diskContents`, une fenêtre propose **Reload** (bouton danger, avec
+  avertissement, s'il y a des modifications non sauvegardées qui seraient
+  perdues). Une seule question à la fois.
+- **À la sauvegarde** (`confirmOverwrite`) : si le fichier sur disque ne
+  correspond plus à `diskContents`, l'app demande avant **Overwrite** au lieu
+  d'écraser silencieusement ; refuser annule la sauvegarde.
+- Le rechargement (`applyProjectFile`, partagé avec l'ouverture) remplace
+  pages, blocs, favoris et connexion, puis réintrospecte.
+- Pas de fusion automatique ni de pont « live » (prévu plus tard, cf. § Intégration Claude).
+
 ### Projets récents
 Liste persistée dans **`localStorage`** (`graft.recentProjects`, max 12) :
 `{ name, projectPath, dbType, dbPath, modifiedAt }`. Mise à jour (remontée en tête)
@@ -573,6 +589,7 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
 | `has_connection_password` | `(connection_id) -> Result<bool, String>` | indique si un mot de passe est stocké (jamais sa valeur) |
 | `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` (atomique) |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
+| `project_file_stamp` | `(path: String) -> Result<u64, String>` | date de modification (ms) d'un `.graft`, pour détecter les changements externes |
 | `write_text_file` | `(path: String, contents: String) -> Result<(), String>` | écrit un fichier texte (export `.sql`, atomique) — **chemin accordé en écriture** requis |
 | `read_text_file` | `(path: String) -> Result<String, String>` | lit un fichier texte (import `.json`/`.sql`) — **chemin accordé en lecture** requis |
 | `pick_project_file` | `() -> Result<Option<String>, String>` | dialogue « ouvrir un `.graft` » |
@@ -989,7 +1006,8 @@ Le **serveur MCP local** (`graft-mcp`) est implémenté (cf. § Serveur MCP
 **Synchronisation avec l'app ouverte.** Si le serveur MCP modifie un `.graft`
 pendant que l'app l'affiche, les deux versions divergent (aujourd'hui la
 sauvegarde de l'app écraserait les changements de Claude). Étapes :
-(a) l'app **surveille** le fichier ouvert et propose de recharger / fusionne ;
+(a) l'app **surveille** le fichier ouvert et propose de recharger — **fait**
+(cf. § Modifications faites hors de l'app) ;
 (b) plus tard, un **pont local** (socket localhost authentifié par jeton, exposé
 par l'app Tauri) auquel le serveur MCP parle quand l'app est ouverte, pour que
 les blocs créés par Claude apparaissent **en direct** sur le canvas.

@@ -11,10 +11,24 @@ import { GraftCanvas } from "./canvas/GraftCanvas";
 import { AppDialogHost } from "./dialogs/AppDialogHost";
 import { useMenuActions } from "./useMenuActions";
 
+/** How often the open project file is checked for changes made by another
+ *  program (a cheap modification-time read; the file is only re-read when
+ *  that changes). */
+const PROJECT_FILE_POLL_MS = 2000;
+
 function Screens() {
   const view = useGraftStore((s) => s.view);
   const saveNotebook = useGraftStore((s) => s.saveNotebook);
   useMenuActions();
+
+  useEffect(() => {
+    if (view !== "canvas") return;
+    const timer = setInterval(
+      () => void useGraftStore.getState().checkProjectFile(),
+      PROJECT_FILE_POLL_MS,
+    );
+    return () => clearInterval(timer);
+  }, [view]);
 
   // ⌘S / Ctrl+S saves the open project (also from inside a block editor).
   // The native File ▸ Save accelerator usually consumes the key first; saving

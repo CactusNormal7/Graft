@@ -311,7 +311,11 @@ Graft**. Il ne peut **pas modifier la base** tant que tu n'as pas coché
 **« Allow Claude (MCP) to modify this database »** dans la fenêtre
 **Connection** (bouton de connexion de la toolbar) ; ce réglage reste sur ton
 ordinateur, il n'est pas enregistré dans le fichier `.graft`. Les blocs que
-Claude crée sont écrits dans le `.graft`.
+Claude crée sont écrits dans le `.graft` : si le projet est ouvert dans Graft,
+une fenêtre **« Project changed on disk »** propose de le **recharger** (et
+prévient si tu as des modifications non sauvegardées). Si tu refuses puis
+enregistres, Graft te demande confirmation avant d'**écraser** les changements
+faits par Claude.
 
 ## 6. Construire un binaire distribuable
 

@@ -61,6 +61,23 @@ pub fn load_notebook(path: String) -> Result<String, String> {
     read_project(Path::new(&path))
 }
 
+/// Last modification time of a `.graft` file, in milliseconds since the
+/// epoch: polled by the app to notice edits made by another program (the MCP
+/// server) without re-reading the whole file.
+#[tauri::command]
+pub fn project_file_stamp(path: String) -> Result<u64, String> {
+    let path = Path::new(&path);
+    graft_core::files::require_project_file(path)?;
+    let modified = fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    let millis = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    Ok(u64::try_from(millis).unwrap_or(u64::MAX))
+}
+
 /// Default directory for new projects: `<Documents|Home>/Graft`, created if missing.
 #[tauri::command]
 pub fn default_project_dir() -> Result<String, String> {

@@ -22,7 +22,7 @@ import { formatSql } from "../formatSql";
 import { connectionFromFile } from "../connection";
 import { referencedKeysOnPage } from "../canvas/tableLinks";
 import { tableKey } from "../canvas/tableRefs";
-import { showError, showMessage } from "../dialogs/appDialogs";
+import { askConfirm, showError, showMessage } from "../dialogs/appDialogs";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
@@ -306,8 +306,11 @@ interface GraftState {
   runBlock: (id: string) => Promise<void>;
   runAll: () => Promise<void>;
 
-  /** Write the project to its `.graft` file; reports failures to the user. */
+  /** Write the project to its `.graft` file; reports failures to the user.
+   *  Asks first when another program changed the file meanwhile. */
   saveNotebook: () => Promise<void>;
+  /** Poll target: offer to reload when another program changed the file. */
+  checkProjectFile: () => Promise<void>;
 }
 
 /** Immutably patch the data of a single node (works for any node kind — the
@@ -599,10 +602,82 @@ export function hasUnsavedChanges(state: GraftState): boolean {
   return savedFingerprint !== null && fingerprint(state) !== savedFingerprint;
 }
 
-/** Record the current state as the saved baseline. */
-function markSaved(get: () => GraftState, set: (partial: Partial<GraftState>) => void) {
+/** Record the current state as the saved baseline; `contents` is the text
+ *  now on disk (just written or read). */
+function markSaved(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  contents: string,
+) {
   savedFingerprint = fingerprint(get());
+  diskContents = contents;
   set({ dirty: false });
+}
+
+// --- Changes made outside the app (e.g. Claude through graft-mcp) ----------
+/** Project file text as the app last read or wrote it. A different text on
+ *  disk means another program changed the file. */
+let diskContents: string | null = null;
+/** Modification stamp last seen by `checkProjectFile`. */
+let lastDiskStamp: number | null = null;
+/** True while the reload question is on screen (polling must not re-ask). */
+let isAskingAboutDisk = false;
+
+/** Apply a project file read from disk to the store (open or reload). */
+function applyProjectFile(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  projectPath: string,
+  contents: string,
+) {
+  const file = JSON.parse(contents) as NotebookFile;
+  const pages = pagesFromFile(file);
+  const active = pages[0];
+  const name = file.name ?? "untitled";
+  const connection = connectionFromFile(file);
+  set({
+    view: "canvas",
+    projectName: name,
+    projectPath,
+    connection,
+    schemaError: null,
+    pages,
+    activePageId: active.id,
+    nodes: active.nodes,
+    edges: active.edges,
+    // Use the cached structure immediately; refreshSchema() then reconciles
+    // it with the database as it is right now.
+    dbSchema: file.dbSchema ?? [],
+    schema: flattenSchema(file.dbSchema ?? []),
+    schemaObjects: EMPTY_SCHEMA_OBJECTS,
+    snippets: file.snippets ?? [],
+    focusedBlockId: null,
+  });
+  markSaved(get, set, contents);
+  touchRecent(get, set, recentEntry(name, projectPath, connection));
+  void get().refreshSchema();
+}
+
+/** Before saving: if another program changed the file since we last read or
+ *  wrote it, ask before overwriting. True means "go ahead". */
+async function confirmOverwrite(projectPath: string): Promise<boolean> {
+  if (diskContents === null) return true;
+  let onDisk: string;
+  try {
+    onDisk = await invoke<string>("load_notebook", { path: projectPath });
+  } catch {
+    return true; // Gone or unreadable: writing it back is the right call.
+  }
+  if (onDisk === diskContents) return true;
+  return askConfirm({
+    title: "Overwrite changes made outside Graft?",
+    message:
+      "The project file was modified by another program since you opened it " +
+      "(for example Claude through the Graft MCP server). Saving replaces those changes. " +
+      "Cancel, then reload the project (File ▸ Open) to keep them.",
+    okLabel: "Overwrite",
+    isDanger: true,
+  });
 }
 
 /** If unsaved changes would be lost, ask the user. True means "go ahead". */
@@ -747,11 +822,10 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     await get().refreshSchema();
 
     // Persist the (empty) project immediately so it is reopenable.
-    await invoke("save_notebook", {
-      path: paths.projectPath,
-      contents: JSON.stringify(serializeNotebook(get()), null, 2),
-    });
-    markSaved(get, set);
+    const contents = JSON.stringify(serializeNotebook(get()), null, 2);
+    await invoke("save_notebook", { path: paths.projectPath, contents });
+    markSaved(get, set, contents);
+    lastDiskStamp = null;
     touchRecent(get, set, recentEntry(name, paths.projectPath, connection));
     return true;
   },
@@ -766,32 +840,8 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     if (!(await confirmDiscard(get()))) return;
     try {
       const contents = await invoke<string>("load_notebook", { path: projectPath });
-      const file = JSON.parse(contents) as NotebookFile;
-      const pages = pagesFromFile(file);
-      const active = pages[0];
-      const name = file.name ?? "untitled";
-      const connection = connectionFromFile(file);
-      set({
-        view: "canvas",
-        projectName: name,
-        projectPath,
-        connection,
-        schemaError: null,
-        pages,
-        activePageId: active.id,
-        nodes: active.nodes,
-        edges: active.edges,
-        // Use the cached structure immediately; refreshSchema() below then
-        // reconciles it with the database as it is right now.
-        dbSchema: file.dbSchema ?? [],
-        schema: flattenSchema(file.dbSchema ?? []),
-        schemaObjects: EMPTY_SCHEMA_OBJECTS,
-        snippets: file.snippets ?? [],
-        focusedBlockId: null,
-      });
-      markSaved(get, set);
-      touchRecent(get, set, recentEntry(name, projectPath, connection));
-      void get().refreshSchema();
+      applyProjectFile(get, set, projectPath, contents);
+      lastDiskStamp = null;
     } catch (err) {
       console.error("Failed to open project:", err);
       // Prune a project file that no longer exists / can't be read.
@@ -1231,19 +1281,50 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     }
   },
 
+  checkProjectFile: async () => {
+    const { projectPath, view } = get();
+    if (!projectPath || view !== "canvas" || isAskingAboutDisk) return;
+    let stamp: number;
+    try {
+      stamp = await invoke<number>("project_file_stamp", { path: projectPath });
+    } catch {
+      return; // Missing or unreadable for now: the next save reports it.
+    }
+    if (stamp === lastDiskStamp) return;
+    lastDiskStamp = stamp;
+    const contents = await invoke<string>("load_notebook", { path: projectPath });
+    if (contents === diskContents || get().projectPath !== projectPath) return;
+
+    isAskingAboutDisk = true;
+    try {
+      const hasLocalEdits = hasUnsavedChanges(get());
+      const shouldReload = await askConfirm({
+        title: "Project changed on disk",
+        message:
+          `"${get().projectName ?? "This project"}" was modified by another program ` +
+          `(for example Claude through the Graft MCP server).` +
+          (hasLocalEdits ? "\n\nReloading discards your unsaved changes." : ""),
+        okLabel: "Reload",
+        isDanger: hasLocalEdits,
+      });
+      if (shouldReload) applyProjectFile(get, set, projectPath, contents);
+    } finally {
+      isAskingAboutDisk = false;
+    }
+  },
+
   saveNotebook: async () => {
     const { projectPath } = get();
     if (!projectPath) return; // projects always have a path once created
+    if (!(await confirmOverwrite(projectPath))) return;
+    const contents = JSON.stringify(serializeNotebook(get()), null, 2);
     try {
-      await invoke("save_notebook", {
-        path: projectPath,
-        contents: JSON.stringify(serializeNotebook(get()), null, 2),
-      });
+      await invoke("save_notebook", { path: projectPath, contents });
     } catch (err) {
       void showError("Could not save the project", `${projectPath}\n\n${String(err)}`);
       return;
     }
-    markSaved(get, set);
+    markSaved(get, set, contents);
     touchRecent(get, set, recentEntry(get().projectName ?? "untitled", projectPath, get().connection));
   },
 }));
