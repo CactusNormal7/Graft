@@ -42,9 +42,9 @@ classique), pas seulement un canvas plein écran :
   façon application desktop classique, sur **macOS et Windows** ;
 - le canvas comme **surface centrale** parmi d'autres vues, pas comme l'app entière.
 
-> Le squelette v0.1 actuel est volontairement minimal (canvas quasi nu) et **sera
-> revu** pour accueillir cette coquille. La direction design passera plus tard par
-> Claude Design.
+> La coquille v0.1 (toolbar + sidebar + canvas + onglets de pages + barre de
+> statut, écran d'accueil) est en place, d'après le wireframe Claude Design. La
+> **barre de menus native** reste à faire.
 
 ## Le modèle de blocs
 
@@ -99,4 +99,9 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
 - **v0.3** — explorateur de schéma, connexions visuelles blocs ↔ tables,
   support Postgres + MySQL.
 - **v1.0** — UX canvas peaufinée (zoom, groupes, zones nommées), types de blocs
-  différenciés, export de notebook, distribution desktop Tauri.
+  différenciés, export de notebook, distribution desktop Tauri. *(Les groupes
+  conteneurs et les pages existent déjà.)*
+
+Fonctions livrées **hors roadmap** : vues de résultat `json` / `chart`, favoris
+`{{nom}}` réutilisables en sous-requête, palette ⌘K (sur les favoris), pont
+relationnel (INSERT multi-tables depuis un résultat ou un JSON imbriqué).

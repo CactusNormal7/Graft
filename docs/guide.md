@@ -44,7 +44,7 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
   - **Emplacement** (par défaut `~/Documents/Graft`, modifiable + *Browse*),
   - **Type de base** (SQLite ; PostgreSQL/MySQL arrivent en v0.3).
   - **Database file (SQLite)** : *Browse* pour pointer un fichier `.db`/`.sqlite`
-    **existant** (ex. `data/sample.db`), ou laisse vide pour créer un nouveau
+    **existant**, ou laisse vide pour créer un nouveau
     `<nom>.db` à côté du projet.
   À la validation, le projet est **créé et sauvegardé immédiatement**
   (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas. Si un projet du
@@ -58,9 +58,9 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 
 > Seul **SQLite** est fonctionnel en v0.1 (multi-moteur en v0.3).
 
-> 💡 Base d'exemple fournie : **`data/sample.db`** (tables `users`, `orders`,
-> `products` avec des données). Tu peux créer un projet pointant dessus, ou pointer
-> un nouveau projet vers ce fichier.
+> 💡 Le dossier `data/` est ignoré par Git (certains jeux de données dépassent
+> la limite de GitHub) : aucune base d'exemple n'est versionnée. Pointe un
+> projet vers ta propre base `.db`/`.sqlite`, ou laisse Graft en créer une vide.
 
 ### Le canvas
 1. **+ Block** (toolbar) → choisis un type (`query`, `migration`, `procedure`,
@@ -107,7 +107,8 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
    - **⧉** duplique le bloc à côté.
    - **✕** supprime le bloc (et son bloc résultat lié, le cas échéant).
    - **Clic droit sur le bloc** ouvre un menu contextuel (Run, Duplicate,
-     Rename, Copy SQL, changement de vue, toggle bloc-lié, Delete).
+     Rename, Collapse, Save as favorite…, Copy SQL, changement de vue, toggle
+     bloc-lié, génération d'INSERT, Delete).
    - **Clic droit sur une cellule ou une ligne** de résultat : copies
      (valeur, colonne, ligne en JSON/INSERT/TSV) et snippets SQL (clause
      `WHERE`, `SELECT` filtré, template `UPDATE`), plus des actions qui
@@ -226,8 +227,13 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 ## 6. Limites actuelles (v0.1)
 
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
-  schéma + gutter + brackets + `Mod-Enter`) — reste à faire côté v0.2+ : LSP
-  (`sql-language-server`), diagnostics en ligne, formatage, palette ⌘K.
+  schéma + gutter + brackets + `Mod-Enter`) — reste à faire côté v0.2 : LSP
+  (`sql-language-server`), diagnostics en ligne, formatage SQL.
+- La **palette ⌘K** ne cherche encore que parmi les **favoris** (pas de
+  commandes).
 - Seul **SQLite** est supporté (Postgres/MySQL en v0.3).
-- Les liens entre blocs sont visuels uniquement (pas encore d'ordre
-  d'exécution).
+- Pas encore de **barre de menus native** (Fichier / Édition / Affichage /
+  Fenêtre) : tout passe par la toolbar et les raccourcis.
+- Certains messages (erreurs, nom d'un favori, suppression d'un favori)
+  utilisent encore les boîtes `alert` / `prompt` / `confirm` du navigateur.
+- Les liens entre blocs sont visuels uniquement (pas d'ordre d'exécution).

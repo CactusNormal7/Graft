@@ -91,9 +91,11 @@ design », design system `graft-design-system`) et est **miroité** dans le repo
   Toute évolution du DS dans Claude Design doit être répercutée dans
   `src/styles/tokens/`. Détails et lien projet en mémoire (`design-system`).
 
-> Le wireframe décrit aussi des éléments **pas encore fonctionnels** rendus en
-> placeholder : explorateur de schéma (introspection v0.3), connexions
-> Postgres/MySQL (v0.3), graphiques, palette de commandes ⌘K, minimap riche.
+> État des éléments du wireframe : la **palette ⌘K** (`CommandPalette.tsx`),
+> la **vue graphique** des résultats (`ChartView.tsx`, Recharts), les **groupes**
+> conteneurs (`GroupNode.tsx`) et l'**explorateur de schéma** SQLite (sidebar)
+> sont fonctionnels. La minimap est celle de React Flow (sans enrichissement).
+> Restent à faire : connexions Postgres/MySQL (v0.3) et minimap riche.
 
 ## Arborescence
 
@@ -108,7 +110,7 @@ Graft/
 │   ├── main.tsx              # bootstrap : fonts + tokens + CSS React Flow + thème
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
-│   ├── sqlFormat.ts          # quoteIdent / sqlLiteral (échappement SQL centralisé)
+│   ├── sqlFormat.ts          # quoteIdent / sqlLiteral / sqlEquals (échappement SQL centralisé — pas un formateur)
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
 │   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
@@ -343,10 +345,12 @@ unique « Page 1 » (`pagesFromFile`). Les nœuds ont la même forme qu'avant.
 
 ```jsonc
 {
-  "version": 4,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages (rétro-compatible en lecture)
+  "version": 5,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages · 5 schéma en cache + favoris (rétro-compatible en lecture)
   "name": "analytics",
   "dbType": "sqlite",                      // sqlite | postgres | mysql
   "dbPath": "/chemin/vers/base.sqlite",   // ou null
+  "dbSchema": [ /* TableInfo[] — cf. « Schéma en cache » */ ],
+  "snippets": [ { "id": "block-...", "name": "recent_users", "sql": "SELECT …", "blockType": "query" } ],
   "pages": [{ "id": "page-...", "name": "Page 1", "nodes": [
     {
       "id": "block-...",
@@ -697,13 +701,21 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   — l'essentiel de la v0.2 est donc déjà là.
 - **Ergonomie éditeur classique** : sidebar avec schéma live (recherche, arbre
   tables/colonnes, double-clic pour insérer au curseur), actions par bloc
-  (renommer, dupliquer, supprimer), table de résultats numérotée avec copie
-  cellule au double-clic.
+  (renommer, dupliquer, replier, supprimer), table de résultats numérotée avec
+  menus cellule/ligne.
+- Fonctions **en avance sur la roadmap** : vues de résultat `json`/`chart`,
+  **groupes** conteneurs (prévus en v1.0), **pages**, **favoris** `{{nom}}`,
+  **palette ⌘K** (limitée aux favoris), pont ORM (INSERT multi-tables).
 - Autocomplétion alimentée par l'introspection **SQLite** uniquement (Postgres/MySQL
   en v0.3).
 - Seul **SQLite** est branché (Postgres/MySQL en v0.3) — mais `sqlx` est déjà
   choisi pour une API unifiée.
-- Les arêtes entre blocs sont dessinables mais n'ont pas encore de sémantique
-  d'exécution (ordre/dépendances) — à définir avec la granularité des blocs.
-- Les `alert`/`prompt` du webview (messages d'erreur, nom d'un favori) ne sont
-  pas encore remplacés par des dialogues natifs ou des modales de l'app.
+- Les arêtes entre blocs sont dessinables mais **purement visuelles** : aucune
+  sémantique d'exécution (ordre/dépendances) — liée à la question ouverte de la
+  granularité des blocs.
+- Les `alert`/`prompt`/`confirm` du webview (messages d'erreur, nom d'un
+  favori, suppression d'un favori) ne sont pas encore remplacés par des
+  fenêtres de l'app.
+- Pas encore de **barre de menus native**, ni de LSP, ni de diagnostics en
+  ligne, ni de formatage SQL (`src/sqlFormat.ts` ne fait que l'échappement des
+  littéraux/identifiants, ce n'est pas un formateur).
