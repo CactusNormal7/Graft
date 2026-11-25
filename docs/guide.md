@@ -16,6 +16,20 @@
 pnpm install
 ```
 
+### Optionnel : serveur de langage SQL
+
+```bash
+pnpm lsp:install
+```
+
+Installe [`sql-language-server`](https://github.com/joe-re/sql-language-server)
+dans ton dossier de données utilisateur. Graft le détecte au lancement et
+l'utilise pour enrichir l'autocomplétion et signaler quelques problèmes
+(soulignés en pointillé, niveau « info »). Sans lui, tout fonctionne avec
+l'autocomplétion intégrée. Note : ce serveur écrit un journal
+(`sql-language-server.log` dans le dossier temporaire) contenant le SQL des
+blocs ; Graft ne lui transmet jamais de connexion ni de mot de passe.
+
 ## 3. Lancer l'application
 
 ```bash
@@ -231,8 +245,8 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 ## 6. Limites actuelles (v0.1)
 
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
-  schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées) — reste à
-  faire côté v0.2 : LSP (`sql-language-server`), formatage SQL.
+  schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées + LSP
+  optionnel) — reste à faire côté v0.2 : formatage SQL.
 - La **palette ⌘K** ne cherche encore que parmi les **favoris** (pas de
   commandes).
 - Seul **SQLite** est supporté (Postgres/MySQL en v0.3).

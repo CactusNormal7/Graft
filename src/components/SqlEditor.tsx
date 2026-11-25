@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import {
   sql,
@@ -20,6 +20,17 @@ import {
   foldKeymap,
 } from "@codemirror/language";
 import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
+import {
+  LSPClient,
+  languageServerSupport,
+  serverCompletionSource,
+} from "@codemirror/lsp-client";
+import { blockDocumentUri, getLanguageServer } from "../lsp/languageServer";
+import {
+  subscribeDiagnostics,
+  toServerDiagnostics,
+  type LspDiagnostic,
+} from "../lsp/serverDiagnostics";
 import { registerEditor, unregisterEditor } from "../canvas/editorRegistry";
 import type { ErrorRange } from "./sqlDiagnostics";
 
@@ -35,16 +46,25 @@ interface SqlEditorProps {
   error?: (ErrorRange & { message: string }) | null;
 }
 
-/** Diagnostics for the editor: none, or the execution error clamped to the
- *  document (the store clears the range on edit, but stay defensive). */
+/** Editor diagnostics: the execution error (clamped to the document — the
+ *  store clears it on edit, but stay defensive) plus the language server's.
+ *  Server diagnostics are only "info": its parser covers a subset of SQL and
+ *  flags valid PRAGMA / CREATE TRIGGER / procedures; the engine is the judge. */
 function toDiagnostics(
   error: SqlEditorProps["error"],
-  docLength: number,
+  serverDiagnostics: LspDiagnostic[],
+  text: string,
 ): Diagnostic[] {
-  if (!error) return [];
-  const from = Math.min(error.from, docLength);
-  const to = Math.min(Math.max(error.to, from), docLength);
-  return [{ from, to, severity: "error", message: error.message, source: "database" }];
+  const fromServer: Diagnostic[] = toServerDiagnostics(text, serverDiagnostics).map(
+    (d) => ({ ...d, severity: "info", source: "sql-language-server" }),
+  );
+  if (!error) return fromServer;
+  const from = Math.min(error.from, text.length);
+  const to = Math.min(Math.max(error.to, from), text.length);
+  return [
+    { from, to, severity: "error", message: error.message, source: "database" },
+    ...fromServer,
+  ];
 }
 
 /**
@@ -73,11 +93,36 @@ export function SqlEditor({
   const viewRef = useRef<EditorView | null>(null);
   const errorRef = useRef(error);
   errorRef.current = error;
+  const serverDiagnosticsRef = useRef<LspDiagnostic[]>([]);
+
+  const [languageServer, setLanguageServer] = useState<LSPClient | null>(null);
+  useEffect(() => {
+    let isMounted = true;
+    void getLanguageServer().then((client) => {
+      if (isMounted) setLanguageServer(client);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+  const documentUri = blockDocumentUri(blockId);
 
   const applyDiagnostics = useCallback((view: EditorView) => {
-    const diagnostics = toDiagnostics(errorRef.current, view.state.doc.length);
+    const diagnostics = toDiagnostics(
+      errorRef.current,
+      serverDiagnosticsRef.current,
+      view.state.doc.toString(),
+    );
     view.dispatch(setDiagnostics(view.state, diagnostics));
   }, []);
+
+  useEffect(() => {
+    if (!languageServer) return;
+    return subscribeDiagnostics(documentUri, (diagnostics) => {
+      serverDiagnosticsRef.current = diagnostics;
+      if (viewRef.current) applyDiagnostics(viewRef.current);
+    });
+  }, [languageServer, documentUri, applyDiagnostics]);
 
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
@@ -112,8 +157,10 @@ export function SqlEditor({
             upperCaseKeywords: true,
           }),
           keywordCompletionSource(dialect, true),
+          ...(languageServer ? [serverCompletionSource] : []),
         ],
       }),
+      ...(languageServer ? [languageServerSupport(languageServer, documentUri, "sql")] : []),
       closeBrackets(),
       bracketMatching(),
       indentOnInput(),
@@ -201,7 +248,7 @@ export function SqlEditor({
         { dark: true },
       ),
     ];
-  }, [schema]);
+  }, [schema, languageServer, documentUri]);
 
   // Keep the module-level registry (used by the sidebar and the command
   // palette to insert into the focused block) free of destroyed views.

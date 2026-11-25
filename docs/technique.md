@@ -106,6 +106,8 @@ Graft/
 ├── vite.config.ts            # config Vite (port fixe 1420 pour Tauri)
 ├── tsconfig.json
 ├── docs/                     # documentation vivante (ce dossier)
+├── scripts/
+│   └── install-sql-language-server.mjs # `pnpm lsp:install` : installe le LSP pour l'utilisateur
 ├── src/                      # frontend React
 │   ├── main.tsx              # bootstrap : fonts + tokens + CSS React Flow + thème
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
@@ -114,6 +116,9 @@ Graft/
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
 │   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
+│   ├── lsp/
+│   │   ├── languageServer.ts # client LSP partagé (@codemirror/lsp-client) sur l'IPC Tauri
+│   │   └── serverDiagnostics.ts # diagnostics publiés par le serveur, par document → offsets éditeur
 │   ├── store/
 │   │   ├── useGraftStore.ts  # store Zustand (view, pages, nodes/edges de la page active, dbPath, palette, actions)
 │   │   └── snippets.ts       # favoris : expansion {{nom}} + normalisation des noms
@@ -163,7 +168,8 @@ Graft/
         ├── db.rs             # moteur SQLite (execute_sql, introspect_schema) + tests
         ├── notebook.rs       # E/S fichiers (atomique, .graft only / chemins accordés), projets + tests
         ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
-        └── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
+        ├── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
+        └── lsp.rs            # processus sql-language-server : résolution, framing LSP, pont IPC + tests
 ```
 
 ## Flux de données
@@ -294,6 +300,53 @@ clic, supprimable (✕).
   **dupliquer** (⧉), **supprimer** (✕) et **▶ Run** — le run est aussi
   déclenché par `Mod-Enter`.
 
+### Serveur de langage SQL (LSP) — `sql-language-server`
+
+**Choix de livraison : processus externe optionnel, résolu à l'exécution**
+(pas de sidecar Tauri embarqué pour l'instant).
+
+- `sql-language-server` (joe-re, choix acté dans `CLAUDE.md`) est un programme
+  **Node** : l'embarquer en sidecar suppose d'embarquer un runtime Node (ou de
+  le compiler en binaire autonome), et il dépend du module natif `sqlite3`,
+  compilé par plateforme. Le paquet publié (1.7.1) casse en plus avec la
+  version de `vscode-languageserver-protocol` résolue par défaut
+  (`ERR_PACKAGE_PATH_NOT_EXPORTED`) : il faut épingler la 3.16.0. Trop fragile
+  pour un bundle macOS/Windows à ce stade.
+- **Installation** : `pnpm lsp:install` (`scripts/install-sql-language-server.mjs`)
+  l'installe dans le dossier de données utilisateur
+  (`~/Library/Application Support/Graft/sql-language-server` sur macOS,
+  `%APPDATA%\Graft\sql-language-server` sur Windows) avec la version de
+  protocole épinglée et `--ignore-scripts` (le driver natif `sqlite3` n'est
+  pas utilisé, cf. plus bas).
+- **Résolution** (`src-tauri/src/lsp.rs`, `resolve_command`) : variable
+  `GRAFT_SQL_LANGUAGE_SERVER` → exécutable à côté du binaire Graft (emplacement
+  d'un futur sidecar) → installation utilisateur ci-dessus → `PATH`. Absent →
+  `lsp_start` renvoie `false` et l'éditeur garde son autocomplétion native :
+  **dégradation silencieuse**, rien n'est cassé.
+- **Pont** : le webview ne peut pas lancer de processus. `lsp_start` lance
+  `sql-language-server up --method stdio` (une seule instance, réutilisée) ;
+  un thread lit stdout, découpe les messages (en-têtes `Content-Length`,
+  `read_message`) et les émet en événements Tauri `lsp-message` ; `lsp_send`
+  encadre (`encode_message`) et écrit sur stdin. Le protocole lui-même est géré
+  côté front par **`@codemirror/lsp-client`** (`src/lsp/languageServer.ts`,
+  transport sur l'IPC Tauri). Un seul client pour tous les blocs ; chaque bloc
+  est un document `file:///graft/<id>.sql`.
+- **Apport** : complétions du serveur (`serverCompletionSource`) ajoutées aux
+  sources existantes (schéma + mots-clés), et diagnostics `sqlint`. Les règles
+  de mise en page de sqlint (alignements, retours à la ligne, casse des
+  mots-clés) sont **désactivées** — elles se battent avec un éditeur libre sur
+  canvas ; restent `space-surrounding-operators` et
+  `require-as-to-rename-column` en avertissement.
+- **Diagnostics du serveur = niveau « info »** (`src/lsp/serverDiagnostics.ts`,
+  fusionnés avec l'erreur d'exécution dans `SqlEditor`) : son parseur ne couvre
+  qu'un sous-ensemble de SQL et signale à tort `PRAGMA`, `CREATE TRIGGER` ou les
+  procédures — exactement le travail d'un DBA. Le moteur reste seul juge des
+  erreurs (niveau « error »).
+- **Confidentialité** : le serveur journalise **tout** ce qu'il reçoit (niveau
+  debug forcé) dans `<tmp>/sql-language-server.log`, SQL des blocs compris.
+  Graft ne lui transmet donc **aucune connexion ni identifiant** — le schéma
+  vient de l'introspection native de Graft.
+
 ## Commandes Tauri exposées (`lib.rs`)
 
 | Commande | Signature | Rôle |
@@ -311,6 +364,8 @@ clic, supprimable (✕).
 | `pick_export_file` | `(default_name: String) -> Result<Option<String>, String>` | dialogue export `.sql` ; **accorde l'écriture** du chemin choisi |
 | `confirm_dialog` | `(title, message, ok_label) -> Result<bool, String>` | confirmation native OK/Annuler |
 | `set_unsaved_changes` | `(dirty: bool)` | reflète l'état « non sauvegardé » pour la garde fermeture/quit |
+| `lsp_start` | `() -> Result<bool, String>` | lance `sql-language-server` s'il est installé (idempotent) ; `false` sinon |
+| `lsp_send` | `(message: String) -> Result<(), String>` | envoie un message JSON-RPC au serveur (réponses : événement `lsp-message`) |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
@@ -599,7 +654,8 @@ pnpm build          # type-check (tsc) + build frontend seul
 cargo check         # (dans src-tauri/) vérifie le backend Rust
 pnpm test           # tests frontend (Vitest, une passe)
 pnpm test:watch     # Vitest en mode watch
-cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs / scope.rs
+cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs / scope.rs / lsp.rs
+pnpm lsp:install    # installe sql-language-server (optionnel) pour l'utilisateur courant
 ```
 
 **Tests frontend (Vitest)** — fichiers `*.test.ts` à côté du code testé,
@@ -611,6 +667,11 @@ remplacés par des faux via `vi.mock`). Fixtures de schéma : `src/test/schema.t
 
 > Sous Linux/WSL, `cargo check`/`cargo test` exigent les libs de dev GTK/WebKit
 > de Tauri (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`…).
+
+> Le test `lsp::tests::initializes_a_real_server_when_installed` ne s'exécute
+> vraiment que si `GRAFT_SQL_LANGUAGE_SERVER` pointe sur un serveur (sinon il
+> passe sans rien faire) :
+> `GRAFT_SQL_LANGUAGE_SERVER=<data>/Graft/sql-language-server/node_modules/.bin/sql-language-server cargo test lsp`.
 
 > Si `cargo` est introuvable dans une nouvelle session : `source "$HOME/.cargo/env"`.
 
@@ -732,5 +793,5 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 - Les `alert`/`prompt`/`confirm` du webview (messages d'erreur, nom d'un
   favori, suppression d'un favori) ne sont pas encore remplacés par des
   fenêtres de l'app.
-- Pas encore de **barre de menus native**, ni de LSP, ni de formatage SQL (`src/sqlFormat.ts` ne fait que l'échappement des
+- Pas encore de **barre de menus native**, ni de formatage SQL (`src/sqlFormat.ts` ne fait que l'échappement des
   littéraux/identifiants, ce n'est pas un formateur).

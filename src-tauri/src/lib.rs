@@ -1,5 +1,6 @@
 mod db;
 mod dialogs;
+mod lsp;
 mod notebook;
 mod scope;
 
@@ -52,6 +53,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(FileScope::default())
         .manage(UnsavedChanges::default())
+        .manage(lsp::LanguageServer::default())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if has_unsaved_changes(window.app_handle()) {
@@ -79,6 +81,8 @@ pub fn run() {
             dialogs::pick_export_file,
             dialogs::confirm_dialog,
             set_unsaved_changes,
+            lsp::lsp_start,
+            lsp::lsp_send,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
