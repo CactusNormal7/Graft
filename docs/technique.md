@@ -27,9 +27,9 @@ SQLite seul (v0.1) n'est qu'un point de départ. `sqlx` est précisément choisi
 (`postgres`, `mysql`, `sqlite`). **Les trois sont branchés depuis la v0.3**
 (cf. § Connexions et moteurs).
 
-L'ambition « complète » (cf. `docs/conceptuel.md` § Ambition) implique à terme
-un **gestionnaire de connexions** (connexions nommées partagées entre projets) ;
-aujourd'hui chaque projet porte **sa** connexion, éditable depuis la toolbar.
+Chaque projet porte **sa** connexion (éditable depuis la toolbar), et une
+**bibliothèque de connexions nommées** permet de les réutiliser d'un projet à
+l'autre (cf. § Connexions et moteurs).
 
 ### Plateformes cibles
 
@@ -177,6 +177,7 @@ Graft/
     │       └── src/
     │           ├── db/       # moteurs SQLite / Postgres / MySQL — cf. § Connexions et moteurs
     │           ├── inserts.rs # INSERT depuis un résultat (portage de orm.ts / resultShape.ts, parent → enfants compris)
+    │           ├── connections.rs # bibliothèque locale de connexions nommées (sans mot de passe)
     │           ├── files.rs  # E/S .graft : écriture atomique, règle « .graft uniquement », noms et chemins de projet
     │           ├── notebook.rs # lecture/édition des blocs d'un .graft en Rust (champs inconnus préservés) + expansion {{favoris}}
     │           ├── registry.rs # projets connus + autorisation d'écriture MCP par projet (hors du .graft)
@@ -188,6 +189,7 @@ Graft/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
         ├── claude_desktop.rs # « Install in Claude Desktop » : fusion de claude_desktop_config.json + tests
+        ├── connection_commands.rs # bibliothèque de connexions nommées (list / save / delete)
         ├── registry_commands.rs # register_project / get_mcp_writes / set_mcp_writes (registre des projets connus)
         ├── db_commands.rs    # commandes Tauri sur graft_core::db (execute_sql / introspect_schema / test_connection / mots de passe)
         ├── notebook.rs       # commandes fichiers (s'appuient sur graft_core::files ; chemins accordés), projets + tests
@@ -246,6 +248,19 @@ Le module `db` vit dans le crate **`graft-core`** (`src-tauri/crates/graft-core/
   connexion SQLite (`connectionFromFile`, `src/connection.ts`) et réécrit en v6
   à la sauvegarde ; v6 continue d'écrire `dbType`/`dbPath` pour les lecteurs
   plus anciens.
+- **Connexions nommées** (`graft-core/src/connections.rs`,
+  `<données utilisateur>/Graft/connections.json`, commandes
+  `list_saved_connections` / `save_connection` / `delete_saved_connection`) :
+  bibliothèque locale de connexions réutilisables entre projets. Le `.graft`
+  garde **sa copie** de la connexion (le fichier reste autonome quand il est
+  partagé) ; choisir une connexion enregistrée la copie **avec son `id`**, donc
+  les projets qui l'utilisent partagent le mot de passe du trousseau. Noms
+  uniques (casse ignorée), mise à jour par `id`, jamais de mot de passe dans
+  le fichier ; retirer une connexion de la bibliothèque garde son mot de passe
+  (des projets peuvent encore s'en servir). UI : sélecteur « Saved connection »
+  et champ « Save as named connection » dans `ConnectionForm` (création et
+  édition), liste **Connections** sur l'accueil (clic = nouveau projet sur
+  cette connexion, état `newProjectConnection` du store ; ✕ = retirer).
 - **UI** : `ConnectionForm` (moteur, fichier SQLite ou hôte/port/base/
   utilisateur/mot de passe/SSL, bouton **Test connection** →
   `test_connection`, connexion jetable non mise en cache) est utilisé par
@@ -615,6 +630,7 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
 | `register_project` | `(path, name) -> Result<(), String>` | inscrit le projet dans le registre local (seuls ces projets sont accessibles au MCP) |
 | `get_mcp_writes` / `set_mcp_writes` | `(path[, allow])` | lit / règle l'autorisation d'écriture de Claude (MCP) pour le projet |
 | `install_claude_desktop` | `() -> Result<String, String>` | inscrit le sidecar `graft-mcp` dans la config de Claude Desktop ; renvoie le chemin du fichier écrit |
+| `list_saved_connections` / `save_connection` / `delete_saved_connection` | `() / (name, connection) / (id)` | bibliothèque des connexions nommées (renvoie la liste à jour) |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
@@ -1188,8 +1204,6 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 - Fonctions **en avance sur la roadmap** : vues de résultat `json`/`chart`,
   **groupes** conteneurs (prévus en v1.0), **pages**, **favoris** `{{nom}}`,
   **palette ⌘K**, pont ORM (INSERT multi-tables).
-- Une connexion par projet (pas encore de gestionnaire de connexions nommées
-  partagées entre projets).
 - **Course clavier atténuée, pas supprimée** : un accélérateur de menu (⌘↵,
   ⇧⌥F…) est traité par l'OS avant le webview ; les commandes concernées
   attendent 60 ms, ce qui couvre la frappe humaine, mais une saisie

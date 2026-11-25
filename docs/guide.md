@@ -79,6 +79,13 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
   de la liste.
 - **Open file…** → ouvre un `.graft` existant où qu'il soit.
 
+> **Connexions nommées** : remplis « Save as named connection » (création de
+> projet ou fenêtre Connection) pour enregistrer la connexion sous un nom.
+> Elle apparaît alors dans la liste **Connections** de l'accueil (clic = nouveau
+> projet sur cette base, ✕ = la retirer) et dans le menu « Saved connection »
+> des formulaires. Les projets qui utilisent la même connexion partagent son
+> mot de passe enregistré.
+>
 > **Changer de connexion** : dans un projet ouvert, clique sur le bouton de
 > connexion de la toolbar (à droite du nom du projet). Il passe au **rouge**
 > si la base est injoignable (le message s'affiche dans la sidebar). Laisse le
@@ -340,5 +347,4 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
   schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées + LSP
   optionnel + formatage).
-- Une connexion par projet (pas encore de connexions nommées partagées).
 - Les liens entre blocs sont visuels uniquement (pas d'ordre d'exécution).
