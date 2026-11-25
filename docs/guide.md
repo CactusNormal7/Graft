@@ -96,6 +96,10 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      message ; à défaut, la première ligne est soulignée. Le soulignement
      disparaît dès que tu modifies le SQL.
 3. **Actions par bloc** dans le header :
+   - **Formater le SQL** : **Shift+Alt+F** (⇧⌥F sur Mac) dans l'éditeur, ou
+     clic droit → **Format SQL**, ou la palette ⌘K. Mise en forme selon le
+     dialecte du moteur, mots-clés en majuscules ; les `{{favoris}}` sont
+     préservés ; annulable par Ctrl/Cmd+Z. Un SQL invalide est laissé tel quel.
    - **Double-clic sur le titre** → renommer (Entrée pour valider, Échap pour
      annuler).
    - **☰ / {} / 📊** cycle la vue du résultat entre **table**, **json** et
@@ -196,9 +200,11 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 - **Insérer une référence** : double-clic sur le favori dans la sidebar (insère
   `{{nom}}` dans le bloc focalisé), ou double-clic sans bloc focalisé pour
   ouvrir le favori comme nouveau bloc.
-- **⌘K / Ctrl+K** ouvre la **barre d'actions** : recherche parmi les favoris,
-  ↑/↓ pour naviguer, ↵ pour insérer la référence dans le bloc focalisé (ou créer
-  un bloc si aucun n'est focalisé).
+- **⌘K / Ctrl+K** ouvre la **barre d'actions** : tape pour filtrer les
+  **commandes** (Format SQL, Run, New … block, Save, Zoom…, avec leur
+  raccourci) et les **favoris** ; ↑/↓ pour naviguer, ↵ pour lancer la commande
+  ou insérer la référence du favori dans le bloc focalisé (ou créer un bloc si
+  aucun n'est focalisé).
 
 ### Données imbriquées ↔ INSERT multi-tables (ORM)
 Une requête avec jointures donne une vue imbriquée (`{}`) — et cette vue est une
@@ -246,9 +252,7 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
   schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées + LSP
-  optionnel) — reste à faire côté v0.2 : formatage SQL.
-- La **palette ⌘K** ne cherche encore que parmi les **favoris** (pas de
-  commandes).
+  optionnel + formatage).
 - Seul **SQLite** est supporté (Postgres/MySQL en v0.3).
 - Pas encore de **barre de menus native** (Fichier / Édition / Affichage /
   Fenêtre) : tout passe par la toolbar et les raccourcis.

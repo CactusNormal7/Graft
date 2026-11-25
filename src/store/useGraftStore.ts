@@ -17,7 +17,8 @@ import {
   pickProjectFile,
   setUnsavedChanges,
 } from "../native";
-import { insertIntoEditor } from "../canvas/editorRegistry";
+import { insertIntoEditor, replaceEditorContent } from "../canvas/editorRegistry";
+import { formatSql } from "../formatSql";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
@@ -250,6 +251,11 @@ interface GraftState {
     position: { x: number; y: number },
   ) => void;
   updateSql: (id: string, sql: string) => void;
+  /** Pretty-print a block's SQL for the project's engine (undoable in the
+   *  editor). Leaves the SQL untouched when it cannot be parsed. */
+  formatBlock: (id: string) => void;
+  /** `formatBlock` on the block whose editor last had focus. */
+  formatFocusedBlock: () => void;
   updateTitle: (id: string, title: string) => void;
   setResultView: (id: string, view: ResultView) => void;
   setChartConfig: (id: string, config: ChartConfig) => void;
@@ -943,6 +949,26 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   // Editing invalidates the underlined error range: it pointed into the old text.
   updateSql: (id, sql) =>
     set({ nodes: patchNode(get().nodes, id, { sql, editorError: null }) }),
+
+  formatBlock: (id) => {
+    const node = get().nodes.find((n) => n.id === id);
+    if (!node || !isSqlNode(node)) return;
+    let formatted: string;
+    try {
+      formatted = formatSql(node.data.sql, get().dbType);
+    } catch (err) {
+      console.error("Could not format the SQL:", err);
+      return;
+    }
+    if (formatted === node.data.sql) return;
+    // Through the editor when mounted, so the change lands in its undo history.
+    if (!replaceEditorContent(id, formatted)) get().updateSql(id, formatted);
+  },
+
+  formatFocusedBlock: () => {
+    const focused = get().focusedBlockId;
+    if (focused) get().formatBlock(focused);
+  },
 
   updateTitle: (id, title) =>
     set({ nodes: patchNode(get().nodes, id, { title }) }),

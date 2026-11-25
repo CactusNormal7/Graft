@@ -113,6 +113,9 @@ Graft/
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
 │   ├── sqlFormat.ts          # quoteIdent / sqlLiteral / sqlEquals (échappement SQL centralisé — pas un formateur)
+│   ├── formatSql.ts          # formatage SQL (sql-formatter, dialecte du moteur, {{favoris}} préservés)
+│   ├── commands.ts           # commandes de l'app (useAppCommands) partagées palette / menus + SHORTCUTS
+│   ├── shortcuts.ts          # libellés de raccourcis par plateforme (⌘⇧F / Ctrl+Shift+F)
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
 │   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
@@ -135,7 +138,7 @@ Graft/
 │   │   └── HomeScreen.tsx    # écran d'accueil (connexions, quick connect, récents)
 │   ├── components/
 │   │   ├── NewProjectModal.tsx # modale de création de projet (nom, emplacement, moteur, fichier SQLite)
-│   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (favoris) — état `paletteOpen` dans le store
+│   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (commandes + favoris) — état `paletteOpen` dans le store
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
 │   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
 │   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter, diagnostics
@@ -299,6 +302,31 @@ clic, supprimable (✕).
 - Le nœud (`SqlBlockNode`) expose aussi **titre éditable** (double-clic),
   **dupliquer** (⧉), **supprimer** (✕) et **▶ Run** — le run est aussi
   déclenché par `Mod-Enter`.
+
+### Formatage SQL
+- `src/formatSql.ts` : `formatSql(sql, dbType)` s'appuie sur **`sql-formatter`**
+  (dialecte `sqlite` / `postgresql` / `mysql` selon le moteur du projet,
+  mots-clés en majuscules, indentation 2). Dépendance ajoutée car
+  `sql-language-server` n'expose **pas** de formatage (pas de
+  `documentFormattingProvider`) et `src/sqlFormat.ts` ne fait que de
+  l'échappement. Les références `{{favori}}` sont déclarées comme paramètres
+  personnalisés : elles restent intactes.
+- `store.formatBlock(id)` / `formatFocusedBlock()` : remplace le SQL **via
+  l'éditeur** quand il est monté (`replaceEditorContent` du registre → la
+  modification est annulable par Ctrl/Cmd+Z), sinon directement dans le
+  store. SQL non analysable → texte inchangé, erreur signalée.
+- Points d'entrée : raccourci **Shift+Alt+F** (⇧⌥F sur macOS) dans l'éditeur,
+  entrée **Format SQL** du menu contextuel du bloc, commande **Format SQL** de
+  la palette.
+
+### Palette de commandes (⌘K)
+`CommandPalette.tsx` liste les **commandes de l'app** (`useAppCommands` dans
+`src/commands.ts` : formater, exécuter le bloc focalisé / tout, nouveau bloc
+par type, groupe, page, sauvegarder, importer, rafraîchir le schéma, zoom,
+accueil) puis les **favoris**. Une commande désactivée (ex. « Format SQL »
+sans bloc focalisé) n'est pas proposée. La même liste alimente la barre de
+menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
+`Mod+Shift+F`) et affichés selon la plateforme (`shortcutLabel`).
 
 ### Serveur de langage SQL (LSP) — `sql-language-server`
 
@@ -524,7 +552,7 @@ Exposé par : menu contextuel d'un bloc/résultat (**Generate INSERTs → new
 block**, **Copy INSERTs**, **Export INSERTs (.sql)…**) et bouton **Import…** de
 la toolbar (`.json` imbriqué → INSERT multi-tables, `.sql` → chargé tel quel
 dans un bloc `script`). E/S fichier via les commandes `write_text_file` /
-`read_text_file`. Le formatage SQL (`quoteIdent`/`sqlLiteral`) est centralisé
+`read_text_file`. L'échappement SQL (`quoteIdent`/`sqlLiteral`) est centralisé
 dans `src/sqlFormat.ts`.
 
 **Pages en mémoire** — le store garde `pages: Page[]` + `activePageId`, et
@@ -782,7 +810,7 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   menus cellule/ligne.
 - Fonctions **en avance sur la roadmap** : vues de résultat `json`/`chart`,
   **groupes** conteneurs (prévus en v1.0), **pages**, **favoris** `{{nom}}`,
-  **palette ⌘K** (limitée aux favoris), pont ORM (INSERT multi-tables).
+  **palette ⌘K**, pont ORM (INSERT multi-tables).
 - Autocomplétion alimentée par l'introspection **SQLite** uniquement (Postgres/MySQL
   en v0.3).
 - Seul **SQLite** est branché (Postgres/MySQL en v0.3) — mais `sqlx` est déjà
@@ -793,5 +821,4 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 - Les `alert`/`prompt`/`confirm` du webview (messages d'erreur, nom d'un
   favori, suppression d'un favori) ne sont pas encore remplacés par des
   fenêtres de l'app.
-- Pas encore de **barre de menus native**, ni de formatage SQL (`src/sqlFormat.ts` ne fait que l'échappement des
-  littéraux/identifiants, ce n'est pas un formateur).
+- Pas encore de **barre de menus native**.

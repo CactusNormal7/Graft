@@ -1,16 +1,30 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useGraftStore } from "../store/useGraftStore";
+import { useAppCommands, type AppCommand } from "../commands";
+import { shortcutLabel } from "../shortcuts";
+import type { Snippet } from "../types";
+
+type PaletteItem =
+  | { kind: "command"; command: AppCommand }
+  | { kind: "favorite"; snippet: Snippet };
+
+const SQL_PREVIEW_LENGTH = 70;
+
+function matches(query: string, ...texts: string[]): boolean {
+  return texts.some((text) => text.toLowerCase().includes(query));
+}
 
 /**
- * ⌘K / Ctrl+K action bar. For now it only searches saved favorite blocks:
- * pick one to insert a `{{name}}` reference into the focused block, or to drop
- * its SQL into a brand-new block when nothing is focused.
+ * ⌘K / Ctrl+K action bar: app commands (format, run, new block, zoom…) and
+ * saved favorite blocks. A favorite inserts a `{{name}}` reference into the
+ * focused block, or drops its SQL into a new block when nothing is focused.
  */
 export function CommandPalette() {
   const snippets = useGraftStore((s) => s.snippets);
   const focusedBlockId = useGraftStore((s) => s.focusedBlockId);
   const insertSnippetRef = useGraftStore((s) => s.insertSnippetRef);
   const addBlockFromSnippet = useGraftStore((s) => s.addBlockFromSnippet);
+  const commands = useAppCommands();
 
   const open = useGraftStore((s) => s.paletteOpen);
   const setOpen = useGraftStore((s) => s.setPaletteOpen);
@@ -33,7 +47,7 @@ export function CommandPalette() {
   }, [setOpen]);
 
   // Start from a clean search every time the palette opens, however it was
-  // opened (shortcut or toolbar button).
+  // opened (shortcut, toolbar button or menu).
   useEffect(() => {
     if (!open) return;
     setQuery("");
@@ -41,24 +55,30 @@ export function CommandPalette() {
     inputRef.current?.focus();
   }, [open]);
 
-  const results = useMemo(() => {
+  const items = useMemo<PaletteItem[]>(() => {
     const q = query.trim().toLowerCase();
-    const list = q
-      ? snippets.filter(
-          (s) =>
-            s.name.toLowerCase().includes(q) || s.sql.toLowerCase().includes(q),
-        )
-      : snippets;
-    return [...list].sort((a, b) => a.name.localeCompare(b.name));
-  }, [snippets, query]);
+    const commandItems: PaletteItem[] = commands
+      .filter((command) => command.isEnabled() && (!q || matches(q, command.label)))
+      .map((command) => ({ kind: "command", command }));
+    const favoriteItems: PaletteItem[] = snippets
+      .filter((snippet) => !q || matches(q, snippet.name, snippet.sql))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((snippet) => ({ kind: "favorite", snippet }));
+    return [...commandItems, ...favoriteItems];
+    // `focusedBlockId` is a dependency because it changes which commands are enabled.
+  }, [commands, snippets, query, focusedBlockId]);
 
   if (!open) return null;
 
-  const choose = (id: string) => {
-    // Focused editor → insert a reference; otherwise spawn a block with the SQL.
-    if (focusedBlockId) insertSnippetRef(id);
-    else addBlockFromSnippet(id);
+  const choose = (item: PaletteItem) => {
     setOpen(false);
+    if (item.kind === "command") {
+      item.command.run();
+    } else if (focusedBlockId) {
+      insertSnippetRef(item.snippet.id);
+    } else {
+      addBlockFromSnippet(item.snippet.id);
+    }
   };
 
   return (
@@ -67,7 +87,7 @@ export function CommandPalette() {
         <input
           ref={inputRef}
           className="palette__input"
-          placeholder="Search favorite blocks…"
+          placeholder="Type a command or search favorite blocks…"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
@@ -76,46 +96,53 @@ export function CommandPalette() {
           onKeyDown={(e) => {
             if (e.key === "ArrowDown") {
               e.preventDefault();
-              setActive((i) => Math.min(results.length - 1, i + 1));
+              setActive((i) => Math.min(items.length - 1, i + 1));
             } else if (e.key === "ArrowUp") {
               e.preventDefault();
               setActive((i) => Math.max(0, i - 1));
-            } else if (e.key === "Enter" && results[active]) {
+            } else if (e.key === "Enter" && items[active]) {
               e.preventDefault();
-              choose(results[active].id);
+              choose(items[active]);
             }
           }}
         />
 
         <div className="palette__list">
-          {snippets.length === 0 && (
-            <div className="palette__empty">
-              No favorite yet — right-click a block → “Save as favorite…”.
-            </div>
-          )}
-          {snippets.length > 0 && results.length === 0 && (
-            <div className="palette__empty">No match for “{query}”.</div>
-          )}
-          {results.map((s, i) => (
+          {items.length === 0 && <div className="palette__empty">No match for “{query}”.</div>}
+          {items.map((item, i) => (
             <button
-              key={s.id}
+              key={item.kind === "command" ? item.command.id : item.snippet.id}
               className={`palette__item${i === active ? " is-active" : ""}`}
               onMouseEnter={() => setActive(i)}
-              onClick={() => choose(s.id)}
+              onClick={() => choose(item)}
             >
-              <span className={`badge badge--${s.blockType}`}>
-                {s.blockType[0]}
-              </span>
-              <span className="palette__name">{`{{${s.name}}}`}</span>
-              <span className="palette__sql">{s.sql.replace(/\s+/g, " ").slice(0, 70)}</span>
+              {item.kind === "command" ? (
+                <>
+                  <span className="badge badge--command">›</span>
+                  <span className="palette__name">{item.command.label}</span>
+                  {item.command.shortcut && (
+                    <span className="palette__shortcut">{shortcutLabel(item.command.shortcut)}</span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <span className={`badge badge--${item.snippet.blockType}`}>
+                    {item.snippet.blockType[0]}
+                  </span>
+                  <span className="palette__name">{`{{${item.snippet.name}}}`}</span>
+                  <span className="palette__sql">
+                    {item.snippet.sql.replace(/\s+/g, " ").slice(0, SQL_PREVIEW_LENGTH)}
+                  </span>
+                </>
+              )}
             </button>
           ))}
         </div>
 
         <div className="palette__hint">
           {focusedBlockId
-            ? "↵ inserts {{reference}} into the focused block"
-            : "↵ creates a new block from the favorite"}
+            ? "↵ runs the command · a favorite inserts its {{reference}} into the focused block"
+            : "↵ runs the command · a favorite opens as a new block"}
         </div>
       </div>
     </div>

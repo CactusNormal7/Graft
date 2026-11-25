@@ -122,3 +122,25 @@ describe("execution errors", () => {
     expect(store.getState().nodes[0].data.editorError).toBeNull();
   });
 });
+
+describe("formatting", () => {
+  beforeEach(async () => {
+    files.clear();
+    writeProject("/p/f.graft", "f");
+    await store.getState().openProjectByPath("/p/f.graft");
+  });
+
+  it("formats a block and leaves unparseable SQL untouched", () => {
+    store.getState().addBlock("query");
+    const id = store.getState().nodes[0].id;
+    store.getState().updateSql(id, "select a from {{fav}} where x=1");
+    store.getState().formatBlock(id);
+    expect(store.getState().nodes[0].data.sql).toBe("SELECT\n  a\nFROM\n  {{fav}}\nWHERE\n  x = 1");
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    store.getState().updateSql(id, "select (( from");
+    store.getState().formatBlock(id);
+    expect(store.getState().nodes[0].data.sql).toBe("select (( from");
+    errorSpy.mockRestore();
+  });
+});

@@ -26,3 +26,13 @@ export function insertIntoEditor(id: string, text: string) {
   });
   view.focus();
 }
+
+/** Replace the whole document of the block's editor as one undoable change.
+ *  Returns false when the editor isn't mounted (the caller then updates the
+ *  store directly). */
+export function replaceEditorContent(id: string, text: string): boolean {
+  const view = views.get(id);
+  if (!view) return false;
+  view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } });
+  return true;
+}

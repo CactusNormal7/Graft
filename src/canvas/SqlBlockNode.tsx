@@ -6,10 +6,13 @@ import { ResultTable } from "./ResultTable";
 import { BlockContextMenu, type MenuAction } from "./BlockContextMenu";
 import { useInnerScroll } from "./useInnerScroll";
 import { ResultFooter, STATUS_LABEL, VIEW_ICON, nextResultView } from "./blockChrome";
+import { SHORTCUTS } from "../commands";
+import { shortcutLabel } from "../shortcuts";
 import { normalizeResultView, type ChartConfig, type ResultView } from "../types";
 
 export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
   const updateSql = useGraftStore((s) => s.updateSql);
+  const formatBlock = useGraftStore((s) => s.formatBlock);
   const updateTitle = useGraftStore((s) => s.updateTitle);
   const runBlock = useGraftStore((s) => s.runBlock);
   const duplicateBlock = useGraftStore((s) => s.duplicateBlock);
@@ -75,7 +78,12 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
   };
 
   const menuActions: MenuAction[] = [
-    { label: "Run", shortcut: "Ctrl+↵", onClick: () => runBlock(id) },
+    { label: "Run", shortcut: shortcutLabel(SHORTCUTS.runBlock), onClick: () => runBlock(id) },
+    {
+      label: "Format SQL",
+      shortcut: shortcutLabel(SHORTCUTS.formatSql),
+      onClick: () => formatBlock(id),
+    },
     { label: "Duplicate", onClick: () => duplicateBlock(id) },
     { label: "Rename", onClick: () => setEditingTitle(true) },
     {
@@ -258,6 +266,7 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
             schema={schema}
             onChange={(v) => updateSql(id, v)}
             onRun={() => runBlock(id)}
+            onFormat={() => formatBlock(id)}
             onFocus={() => setFocusedBlock(id)}
             error={data.editorError ?? null}
           />

@@ -2,16 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useReactFlow, useStore } from "@xyflow/react";
 import { useGraftStore } from "../store/useGraftStore";
 import { basename } from "../paths";
-import type { BlockType } from "../types";
-
-const BLOCK_TYPES: BlockType[] = [
-  "query",
-  "migration",
-  "procedure",
-  "trigger",
-  "view",
-  "script",
-];
+import { BLOCK_TYPES } from "../commands";
 
 /** Top toolbar shown in the canvas view (see wireframe screens 02/03). */
 export function Toolbar() {
@@ -115,7 +106,7 @@ export function Toolbar() {
       </button>
       <button
         className="btn"
-        title="Command palette — search favorite blocks (⌘K / Ctrl+K)"
+        title="Command palette — commands and favorite blocks (⌘K / Ctrl+K)"
         onClick={() => setPaletteOpen(true)}
       >
         ⌘K

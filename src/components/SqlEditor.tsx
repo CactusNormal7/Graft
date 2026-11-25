@@ -41,6 +41,8 @@ interface SqlEditorProps {
   schema: Record<string, string[]>;
   onChange: (value: string) => void;
   onRun: () => void;
+  /** Pretty-print the SQL (Shift+Alt+F). */
+  onFormat?: () => void;
   onFocus?: () => void;
   /** Last execution error, underlined in the editor when set. */
   error?: (ErrorRange & { message: string }) | null;
@@ -78,6 +80,7 @@ export function SqlEditor({
   schema,
   onChange,
   onRun,
+  onFormat,
   onFocus,
   error,
 }: SqlEditorProps) {
@@ -86,6 +89,8 @@ export function SqlEditor({
   runRef.current = onRun;
   const focusRef = useRef(onFocus);
   focusRef.current = onFocus;
+  const formatRef = useRef(onFormat);
+  formatRef.current = onFormat;
 
   // The EditorView is created asynchronously by @uiw/react-codemirror (after a
   // re-render), so it can't be read from a ref in a mount effect — register it
@@ -172,6 +177,13 @@ export function SqlEditor({
             run: () => {
               runRef.current();
               return true;
+            },
+          },
+          {
+            key: "Shift-Alt-f",
+            run: () => {
+              formatRef.current?.();
+              return formatRef.current !== undefined;
             },
           },
           ...closeBracketsKeymap,
