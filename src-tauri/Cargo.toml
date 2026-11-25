@@ -7,6 +7,9 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[workspace]
+members = ["crates/graft-core"]
+
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -18,25 +21,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+graft-core = { path = "crates/graft-core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
-futures-util = { version = "0.3", default-features = false }
-# rustls (not native-tls) so Windows/macOS builds need no OpenSSL; native
-# roots so corporate CAs installed in the OS trust store are honoured.
-sqlx = { version = "0.8", default-features = false, features = [
-  "runtime-tokio",
-  "tls-rustls-ring-native-roots",
-  "sqlite",
-  "postgres",
-  "mysql",
-] }
-# OS credential store (macOS Keychain, Windows Credential Manager) for
-# connection passwords, which never go into the .graft file.
-keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 tokio = { version = "1", features = ["full"] }
-# Same version as sqlx-sqlite's (Cargo unifies them): only used to read
-# `sqlite3_error_offset`, which sqlx does not expose, to underline errors.
-libsqlite3-sys = "0.30"

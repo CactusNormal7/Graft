@@ -1,11 +1,9 @@
-mod db;
 mod db_commands;
 mod dialogs;
 mod lsp;
 mod menu;
 mod notebook;
 mod scope;
-mod secrets;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -52,13 +50,13 @@ fn confirm_discard<R: Runtime>(app: &AppHandle<R>, proceed: impl FnOnce() + Send
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    secrets::prepare();
+    graft_core::secrets::prepare();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(FileScope::default())
         .manage(UnsavedChanges::default())
         .manage(lsp::LanguageServer::default())
-        .manage(db::Databases::default())
+        .manage(graft_core::db::Databases::default())
         .menu(menu::build)
         .on_menu_event(|app, event| menu::forward_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {

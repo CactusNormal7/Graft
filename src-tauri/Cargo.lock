@@ -1302,15 +1302,26 @@ name = "graft"
 version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
+ "graft-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tokio",
+]
+
+[[package]]
+name = "graft-core"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
  "futures-util",
  "keyring",
  "libsqlite3-sys",
  "serde",
  "serde_json",
  "sqlx",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
  "tokio",
 ]
 

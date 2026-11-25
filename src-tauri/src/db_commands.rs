@@ -4,8 +4,8 @@
 
 use tauri::State;
 
-use crate::db::{self, ConnectionConfig, Databases, QueryResult, SchemaSnapshot, SqlError};
-use crate::secrets;
+use graft_core::db::{self, ConnectionConfig, Databases, QueryResult, SchemaSnapshot, SqlError};
+use graft_core::secrets;
 
 fn stored_password(config: &ConnectionConfig) -> Result<Option<String>, SqlError> {
     match config.engine {

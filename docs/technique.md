@@ -169,16 +169,22 @@ Graft/
 │       ├── rowSql.ts         # SQL des actions par ligne (UPDATE / DELETE / dupliquer / ouvrir) sur table résolue
 │       └── clipboard.ts      # copie presse-papiers
 └── src-tauri/                # backend Rust (Tauri)
-    ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
+    ├── Cargo.toml            # app Tauri + racine du workspace Cargo (membres : crates/*)
+    ├── crates/
+    │   └── graft-core/       # moteur partagé app / serveur MCP, sans dépendance Tauri
+    │       └── src/
+    │           ├── db/       # moteurs SQLite / Postgres / MySQL — cf. § Connexions et moteurs
+    │           ├── files.rs  # E/S .graft : écriture atomique, règle « .graft uniquement », noms et chemins de projet
+    │           ├── notebook.rs # lecture/édition des blocs d'un .graft en Rust (champs inconnus préservés) + expansion {{favoris}}
+    │           ├── registry.rs # projets connus + autorisation d'écriture MCP par projet (hors du .graft)
+    │           └── secrets.rs  # mots de passe dans le trousseau de l'OS (crate keyring)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
     ├── capabilities/default.json  # permissions du webview : `core:default` uniquement
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
-        ├── db/               # moteurs SQLite / Postgres / MySQL (sans dépendance Tauri) — cf. § Connexions et moteurs
-        ├── db_commands.rs    # commandes Tauri execute_sql / introspect_schema / test_connection / mots de passe
-        ├── secrets.rs        # mots de passe dans le trousseau de l'OS (crate keyring)
-        ├── notebook.rs       # E/S fichiers (atomique, .graft only / chemins accordés), projets + tests
+        ├── db_commands.rs    # commandes Tauri sur graft_core::db (execute_sql / introspect_schema / test_connection / mots de passe)
+        ├── notebook.rs       # commandes fichiers (s'appuient sur graft_core::files ; chemins accordés), projets + tests
         ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
         ├── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
         ├── lsp.rs            # processus sql-language-server : résolution, framing LSP, pont IPC + tests
@@ -188,7 +194,7 @@ Graft/
 ## Flux de données
 
 ### Connexions et moteurs (`src-tauri/src/db/`)
-Le module `db` ne dépend pas de Tauri (réutilisable hors de l'app) :
+Le module `db` vit dans le crate **`graft-core`** (`src-tauri/crates/graft-core/src/db/`) et ne dépend pas de Tauri :
 
 | Fichier | Rôle |
 |---------|------|
@@ -893,7 +899,7 @@ pnpm build          # type-check (tsc) + build frontend seul
 cargo check         # (dans src-tauri/) vérifie le backend Rust
 pnpm test           # tests frontend (Vitest, une passe)
 pnpm test:watch     # Vitest en mode watch
-cargo test          # (dans src-tauri/) tests unitaires (db/, notebook, scope, lsp, menu, secrets) + intégration si configurée
+cargo test --workspace # (dans src-tauri/) tests de l'app et de graft-core + intégration si configurée
 pnpm lsp:install    # installe sql-language-server (optionnel) pour l'utilisateur courant
 ```
 
@@ -993,6 +999,13 @@ les blocs créés par Claude apparaissent **en direct** sur le canvas.
   explicitement accordés) ; pas de lecture/écriture de chemins arbitraires.
 - Jamais d'identifiants (mots de passe Postgres/MySQL) dans les réponses ; les
   secrets vivent dans le trousseau de l'OS.
+
+**Avancement :** `graft-core` est extrait (workspace Cargo `src-tauri/`) avec
+le moteur multi-base, les E/S `.graft`, un modèle Rust du `.graft`
+(`notebook.rs` : lister/lire/créer/modifier des blocs en préservant tous les
+champs inconnus, expansion `{{favoris}}` identique à `runBlock`) et le registre
+des projets connus (`registry.rs`, `<données utilisateur>/Graft/projects.json`,
+autorisation d'écriture MCP par projet). Le binaire `graft-mcp` reste à faire.
 
 **Phasage proposé :** extraction de `graft-core` → serveur MCP stdio
 (SQLite, lecture seule + édition de blocs) → surveillance de fichier dans l'app
