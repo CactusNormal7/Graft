@@ -16,6 +16,10 @@ export function setSqlDialect(engine: DbType) {
   dialect = engine;
 }
 
+export function sqlDialect(): DbType {
+  return dialect;
+}
+
 /** Quote an identifier for the active engine: backticks for MySQL (double
  *  quotes are string literals there unless ANSI_QUOTES is on), double quotes
  *  elsewhere; embedded quote characters are doubled. */

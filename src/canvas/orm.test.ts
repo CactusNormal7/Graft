@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { generateInserts, jsonToInserts, matchTable, warningsHeader } from "./orm";
 import type { QueryResult } from "../types";
 import { col, table, usersReviews } from "../test/schema";
+import { setSqlDialect } from "../sqlFormat";
 
 const result = (columns: string[], rows: QueryResult["rows"]): QueryResult => ({
   columns,
@@ -97,6 +98,32 @@ describe("jsonToInserts", () => {
 
   it("rejects input that isn't an object or an array of objects", () => {
     expect(jsonToInserts(42, usersReviews).sql).toBe("");
+  });
+});
+
+describe("parent keys on server engines", () => {
+  afterEach(() => setSqlDialect("sqlite"));
+  const joined = result(["name", "body"], [["ann", "r1"], ["ann", "r2"]]);
+
+  it("uses the parent's sequence on Postgres", () => {
+    setSqlDialect("postgres");
+    const lines = generateInserts(joined, usersReviews).sql.trim().split("\n");
+    expect(lines[1]).toBe(
+      `INSERT INTO "reviews" ("body", "user_id") VALUES ('r1', currval(pg_get_serial_sequence('"users"', 'id')));`,
+    );
+    expect(lines.join("\n")).not.toContain("rowid");
+  });
+
+  it("captures LAST_INSERT_ID() right after the parent on MySQL", () => {
+    setSqlDialect("mysql");
+    expect(generateInserts(joined, usersReviews).sql.trim().split("\n")).toEqual([
+      "INSERT INTO `users` (`name`) VALUES ('ann');",
+      "SET @graft_key_users = LAST_INSERT_ID();",
+      "INSERT INTO `reviews` (`body`, `user_id`) VALUES ('r1', @graft_key_users);",
+      "INSERT INTO `reviews` (`body`, `user_id`) VALUES ('r2', @graft_key_users);",
+    ]);
+    const nested = jsonToInserts([{ name: "cid", reviews: [{ body: "x" }] }], usersReviews);
+    expect(nested.sql.trim().split("\n")[1]).toBe("SET @graft_key_users = LAST_INSERT_ID();");
   });
 });
 

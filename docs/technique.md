@@ -754,11 +754,18 @@ traitée comme une **vraie source de données relationnelle**. Tout y est pur
   (`detectNestedShape`) **et** que les deux côtés correspondent à des tables
   réelles, sort des INSERT **relationnels** : un INSERT parent puis ses enfants,
   avec la FK renseignée : valeur explicite de la colonne visée par la FK (ou de
-  la PK) si elle est sélectionnée, sinon la sous-requête
-  `(SELECT <clé> FROM <parent> ORDER BY rowid DESC LIMIT 1)`. On n'utilise
-  **pas** `last_insert_rowid()` : dès le premier INSERT enfant il désigne
-  l'enfant, et le 2ᵉ enfant aurait été rattaché au 1ᵉʳ. Une ligne sans colonne
-  mappable devient `INSERT … DEFAULT VALUES`. Sinon, repli sur des INSERT plats
+  la PK) si elle est sélectionnée, sinon la **clé générée du dernier parent**,
+  selon le moteur (`lastInsertedKey`) : SQLite → sous-requête
+  `(SELECT <clé> FROM <parent> ORDER BY rowid DESC LIMIT 1)` ; Postgres →
+  `currval(pg_get_serial_sequence('"<parent>"', '<clé>'))` (serial / identity,
+  insensible aux INSERT dans d'autres tables) ; MySQL → variable de session
+  `SET @graft_key_<parent> = LAST_INSERT_ID();` émise juste après l'INSERT
+  parent (`captureInsertedKey`), puis `@graft_key_<parent>` dans les enfants.
+  Les fonctions « dernier id » ne sont jamais utilisées directement : dès le
+  premier INSERT enfant elles désignent l'enfant, et le 2ᵉ enfant aurait été
+  rattaché au 1ᵉʳ. Vérifié sur PostgreSQL 16 et MariaDB 10.11. Une ligne sans
+  colonne mappable devient `INSERT … DEFAULT VALUES` (`INSERT … () VALUES ()`
+  en MySQL). Sinon, repli sur des INSERT plats
   ligne à ligne,
   avec un placeholder `«table»` si aucune table ne correspond.
 - `jsonToInserts(json, schema)` — l'inverse à l'import : les champs scalaires
@@ -1175,9 +1182,6 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   **palette ⌘K**, pont ORM (INSERT multi-tables).
 - Une connexion par projet (pas encore de gestionnaire de connexions nommées
   partagées entre projets).
-- Le pont ORM (`orm.ts`) relit la clé du dernier parent inséré via
-  `ORDER BY rowid DESC` : **SQLite seulement** ; sur Postgres/MySQL, renseigner
-  la clé explicitement (la sélectionner dans le résultat).
 - **Course clavier rare** : un accélérateur de menu (⌘↵, ⇧⌥F…) est traité par
   l'OS avant le webview ; une frappe *immédiatement* suivie du raccourci
   (saisie automatisée) peut exécuter le SQL d'avant cette dernière frappe.
