@@ -12,7 +12,7 @@ const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
       files.set(args!.path as string, args!.contents as string);
       return null;
     case "introspect_schema":
-      return { tables: [] };
+      return { tables: [], triggers: [], routines: [] };
     case "set_connection_password":
       passwords.set(args!.connectionId as string, args!.password as string);
       return null;

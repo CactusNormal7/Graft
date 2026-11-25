@@ -37,6 +37,7 @@ import type {
   QueryResult,
   RecentProject,
   ResultBlockData,
+  SchemaObjects,
   SchemaSnapshot,
   ResultView,
   Snippet,
@@ -169,6 +170,8 @@ interface GraftState {
   /** Full database structure (types, PKs, foreign keys). Introspected at
    *  project create/open, refreshed after DDL, and cached in the `.graft`. */
   dbSchema: DbSchema;
+  /** Triggers and routines of the database (not cached in the `.graft`). */
+  schemaObjects: SchemaObjects;
 
   /** Saved favorite blocks, usable as `{{name}}` inside other queries. */
   snippets: Snippet[];
@@ -520,6 +523,7 @@ function serializeNotebook(state: GraftState): NotebookFile {
 }
 
 const INITIAL_PAGE_ID = "page-initial";
+const EMPTY_SCHEMA_OBJECTS: SchemaObjects = { triggers: [], routines: [] };
 
 // --- Unsaved changes ---------------------------------------------------------
 // The project is "dirty" when what would be written to disk differs from what
@@ -569,6 +573,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   schemaError: null,
   schema: {},
   dbSchema: [],
+  schemaObjects: EMPTY_SCHEMA_OBJECTS,
   snippets: [],
   focusedBlockId: null,
   recentProjects: loadRecents(),
@@ -675,6 +680,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       projectPath: paths.projectPath,
       connection,
       dbSchema: [],
+      schemaObjects: EMPTY_SCHEMA_OBJECTS,
       schema: {},
       schemaError: null,
       snippets: [],
@@ -724,6 +730,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         // reconciles it with the database as it is right now.
         dbSchema: file.dbSchema ?? [],
         schema: flattenSchema(file.dbSchema ?? []),
+        schemaObjects: EMPTY_SCHEMA_OBJECTS,
         snippets: file.snippets ?? [],
         focusedBlockId: null,
       });
@@ -746,14 +753,19 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   refreshSchema: async () => {
     const { connection } = get();
     if (!connection) {
-      set({ schema: {}, dbSchema: [], schemaError: null });
+      set({ schema: {}, dbSchema: [], schemaObjects: EMPTY_SCHEMA_OBJECTS, schemaError: null });
       return;
     }
     try {
       const snapshot = await invoke<SchemaSnapshot>("introspect_schema", { connection });
       // The connection may have changed while introspecting: drop stale data.
       if (get().connection !== connection) return;
-      set({ dbSchema: snapshot.tables, schema: flattenSchema(snapshot.tables), schemaError: null });
+      set({
+        dbSchema: snapshot.tables,
+        schema: flattenSchema(snapshot.tables),
+        schemaObjects: { triggers: snapshot.triggers, routines: snapshot.routines },
+        schemaError: null,
+      });
     } catch (err) {
       // Keep the cached structure: it still helps while the server is down.
       if (get().connection === connection) set({ schemaError: errorMessage(err) });

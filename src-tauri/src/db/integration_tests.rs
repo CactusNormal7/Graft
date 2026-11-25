@@ -51,6 +51,46 @@ const SETUP: &str = "
 ";
 const TEARDOWN: &str = "DROP TABLE graft_it_orders; DROP TABLE graft_it_users;";
 
+/// Index, view, trigger and routine, in each engine's dialect.
+fn objects_script(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => "
+            CREATE INDEX graft_it_orders_user ON graft_it_orders (user_id);
+            CREATE VIEW graft_it_big AS SELECT * FROM graft_it_orders WHERE total > 10;
+            CREATE FUNCTION graft_it_touch() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN NEW.total := COALESCE(NEW.total, 0); RETURN NEW; END $$;
+            CREATE TRIGGER graft_it_orders_touch BEFORE INSERT OR UPDATE ON graft_it_orders
+              FOR EACH ROW EXECUTE FUNCTION graft_it_touch();
+            CREATE PROCEDURE graft_it_reset(target integer) LANGUAGE sql AS
+              $$ UPDATE graft_it_orders SET total = 0 WHERE id = target $$;
+        ",
+        _ => "
+            CREATE INDEX graft_it_orders_user ON graft_it_orders (user_id);
+            CREATE VIEW graft_it_big AS SELECT * FROM graft_it_orders WHERE total > 10;
+            CREATE TRIGGER graft_it_orders_touch BEFORE INSERT ON graft_it_orders
+              FOR EACH ROW SET NEW.total = COALESCE(NEW.total, 0);
+            CREATE PROCEDURE graft_it_reset(IN target INT)
+            BEGIN UPDATE graft_it_orders SET total = 0 WHERE id = target; END;
+        ",
+    }
+}
+
+fn drop_objects_script(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Postgres => "
+            DROP VIEW graft_it_big;
+            DROP TRIGGER graft_it_orders_touch ON graft_it_orders;
+            DROP FUNCTION graft_it_touch();
+            DROP PROCEDURE graft_it_reset(integer);
+        ",
+        _ => "
+            DROP VIEW graft_it_big;
+            DROP TRIGGER graft_it_orders_touch;
+            DROP PROCEDURE graft_it_reset;
+        ",
+    }
+}
+
 async fn exercise(config: ConnectionConfig, password: Option<String>) {
     let password = password.as_deref();
     let databases = Databases::default();
@@ -72,7 +112,10 @@ async fn exercise(config: ConnectionConfig, password: Option<String>) {
     assert_eq!(result.rows[0][1], serde_json::json!("ada"));
     assert_eq!(result.rows[0][3], serde_json::json!(12.5));
 
-    // The connection is one session: what a statement sets survives.
+    databases
+        .execute(&config, password, objects_script(config.engine), 10)
+        .await
+        .unwrap();
     let schema = databases.introspect(&config, password).await.unwrap();
     let orders = schema
         .tables
@@ -84,6 +127,39 @@ async fn exercise(config: ConnectionConfig, password: Option<String>) {
     assert_eq!(orders.foreign_keys.len(), 1);
     assert_eq!(orders.foreign_keys[0].to_table, "graft_it_users");
     assert_eq!(orders.foreign_keys[0].to_column, "id");
+    assert!(orders.indexes.iter().any(|i| i.primary && i.columns == ["id"]));
+    assert!(orders
+        .indexes
+        .iter()
+        .any(|i| i.name == "graft_it_orders_user" && !i.unique && i.columns == ["user_id"]));
+    let view = schema.tables.iter().find(|t| t.name == "graft_it_big").expect("view");
+    assert_eq!(view.kind, "view");
+    assert!(view.definition.as_deref().unwrap_or("").contains("10"));
+    let trigger = schema
+        .triggers
+        .iter()
+        .find(|t| t.name == "graft_it_orders_touch")
+        .expect("trigger introspected");
+    assert_eq!(trigger.table, "graft_it_orders");
+    assert_eq!(trigger.timing, "BEFORE");
+    assert!(trigger.events.contains("INSERT"));
+    let procedure = schema
+        .routines
+        .iter()
+        .find(|r| r.name == "graft_it_reset")
+        .expect("procedure introspected");
+    assert_eq!(procedure.kind, "procedure");
+    assert!(procedure.arguments.contains("target"), "{}", procedure.arguments);
+    assert!(procedure.definition.to_ascii_uppercase().contains("UPDATE"));
+    if config.engine == Engine::Postgres {
+        let function = schema.routines.iter().find(|r| r.name == "graft_it_touch").expect("function");
+        assert_eq!(function.kind, "function");
+        assert_eq!(function.returns.as_deref(), Some("trigger"));
+    }
+    databases
+        .execute(&config, password, drop_objects_script(config.engine), 10)
+        .await
+        .unwrap();
 
     let error = databases
         .execute(&config, password, "SELECT id FROM graft_it_users WHER id = 1", 10)

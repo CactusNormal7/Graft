@@ -36,10 +36,57 @@ pub struct TableInfo {
     pub kind: String,
     pub columns: Vec<ColumnInfo>,
     pub foreign_keys: Vec<ForeignKey>,
+    /// Absent from schemas cached by older versions.
+    #[serde(default)]
+    pub indexes: Vec<IndexInfo>,
+    /// `SELECT` behind a view (None for tables).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<String>,
+}
+
+/// An index of a table. Primary keys are listed too (`primary: true`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct IndexInfo {
+    pub name: String,
+    /// Indexed columns, or expressions for expression indexes.
+    pub columns: Vec<String>,
+    pub unique: bool,
+    pub primary: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TriggerInfo {
+    pub name: String,
+    pub table: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    /// BEFORE, AFTER or INSTEAD OF (empty when unknown).
+    pub timing: String,
+    /// INSERT / UPDATE / DELETE / TRUNCATE, comma-separated.
+    pub events: String,
+    pub definition: String,
+}
+
+/// A stored procedure or function.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RoutineInfo {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    /// "function" or "procedure".
+    pub kind: String,
+    /// Parameter list, e.g. `customer_id integer, OUT total numeric`.
+    pub arguments: String,
+    /// Return type (functions only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub returns: Option<String>,
+    pub definition: String,
 }
 
 /// Everything `introspect_schema` returns.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct SchemaSnapshot {
     pub tables: Vec<TableInfo>,
+    pub triggers: Vec<TriggerInfo>,
+    pub routines: Vec<RoutineInfo>,
 }

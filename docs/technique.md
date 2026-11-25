@@ -193,7 +193,7 @@ Le module `db` ne dépend pas de Tauri (réutilisable hors de l'app) :
 | `db/sqlite.rs` | exécution SQLite (connexion par appel), positions d'erreur, introspection par pragmas |
 | `db/server.rs` | exécution commune Postgres/MySQL (`sqlx::raw_sql`), typage des cellules texte |
 | `db/postgres.rs` / `db/mysql.rs` | options de connexion (SSL), position d'erreur Postgres, introspection (`pg_catalog` / `information_schema`) |
-| `db/schema.rs` | `TableInfo`, `ColumnInfo`, `ForeignKey`, `SchemaSnapshot` |
+| `db/schema.rs` | `SchemaSnapshot { tables, triggers, routines }` : `TableInfo` (colonnes, clés étrangères, **index**, **définition** des vues), `TriggerInfo`, `RoutineInfo` |
 | `db/integration_tests.rs` | tests contre de vrais serveurs (cf. § Tests d'intégration) |
 
 - **Connexion = moteur + cible.** `ConnectionConfig` est sérialisée dans le
@@ -241,6 +241,27 @@ Le module `db` ne dépend pas de Tauri (réutilisable hors de l'app) :
   session au *thread* ; sans session de login (WSL, Xvfb) chaque thread en
   créerait un. `secrets::prepare()` le rejoint sur le thread principal au
   démarrage, avant la création des autres threads, qui en héritent.
+
+### Introspection
+`introspect_schema` renvoie un `SchemaSnapshot` complet, par moteur :
+
+| Objet | SQLite | PostgreSQL | MySQL / MariaDB |
+|-------|--------|------------|-----------------|
+| Tables / vues, colonnes, PK | `sqlite_master` + `pragma_table_info` | `pg_class` / `pg_attribute` / `pg_index` (tables, partitions, vues, vues matérialisées, tables étrangères) | `information_schema.COLUMNS` / `TABLES` |
+| Clés étrangères | `pragma_foreign_key_list` | `pg_constraint` (`unnest(conkey, confkey)`, FK composites) | `KEY_COLUMN_USAGE` |
+| Index (unique, primaire, expressions) | `pragma_index_list` / `pragma_index_info` | `pg_index` + `pg_get_indexdef` par colonne | `STATISTICS` |
+| Définition des vues | SQL de `sqlite_master` | `pg_get_viewdef` | `VIEWS.VIEW_DEFINITION` |
+| Triggers (moment, événements, définition) | SQL de `sqlite_master`, en-tête analysé (`trigger_header`, BEFORE par défaut) | `pg_trigger` (bits de `tgtype` décodés par `trigger_type`) + `pg_get_triggerdef` | `information_schema.TRIGGERS` |
+| Procédures / fonctions (arguments, retour, corps) | — (n'existent pas) | `pg_proc` (`prokind` f/p) + `pg_get_functiondef`, objets d'extensions exclus | `ROUTINES` + `PARAMETERS` |
+
+Postgres : schémas système (`pg_catalog`, `information_schema`, `pg_toast*`,
+`pg_temp*`) exclus ; les objets de `public` ont `schema` vide, les autres
+portent leur schéma. MySQL : base connectée (`DATABASE()`) uniquement, colonnes
+`information_schema` converties en `CHAR` (leur type varie selon la version du
+serveur). Côté store : `dbSchema` = les tables (mis en cache dans le `.graft`,
+index et définitions compris — champs optionnels, les anciens caches restent
+lisibles) ; `schemaObjects = { triggers, routines }` n'est **pas** mis en cache
+(réintrospecté à l'ouverture).
 
 ### Exécution d'une requête
 1. L'utilisateur clique **▶ Run** sur un bloc → `runBlock(id)` dans le store.
@@ -834,7 +855,8 @@ remplacés par des faux via `vi.mock`). Fixtures de schéma : `src/test/schema.t
 ### Tests d'intégration Postgres / MySQL
 `src-tauri/src/db/integration_tests.rs` exerce chaque moteur de bout en bout
 (test de connexion, script multi-instructions, valeurs typées, plafond de
-lignes, introspection PK/FK, position d'erreur, mauvais mot de passe refusé).
+lignes, introspection PK/FK/index/vue/trigger/procédure et fonction, position
+d'erreur, mauvais mot de passe refusé).
 Chaque test **passe sans rien faire** si sa variable d'environnement est
 absente ; avec elle, il crée et supprime ses propres tables `graft_it_*` :
 

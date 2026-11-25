@@ -149,6 +149,42 @@ export interface TableInfo {
   kind: string;
   columns: ColumnInfo[];
   foreign_keys: ForeignKey[];
+  /** Absent from schemas cached by older versions. */
+  indexes?: IndexInfo[];
+  /** `SELECT` behind a view. */
+  definition?: string;
+}
+
+/** An index of a table (primary keys included, `primary: true`). */
+export interface IndexInfo {
+  name: string;
+  /** Columns, or expressions for expression indexes. */
+  columns: string[];
+  unique: boolean;
+  primary: boolean;
+}
+
+export interface TriggerInfo {
+  name: string;
+  table: string;
+  schema?: string;
+  /** BEFORE, AFTER or INSTEAD OF. */
+  timing: string;
+  /** INSERT / UPDATE / DELETE / TRUNCATE, comma-separated. */
+  events: string;
+  definition: string;
+}
+
+/** A stored procedure or function. */
+export interface RoutineInfo {
+  name: string;
+  schema?: string;
+  kind: "function" | "procedure";
+  /** Parameter list, e.g. `customer_id integer`. */
+  arguments: string;
+  /** Return type (functions only). */
+  returns?: string;
+  definition: string;
 }
 
 /**
@@ -161,6 +197,14 @@ export type DbSchema = TableInfo[];
 /** What `introspect_schema` returns. */
 export interface SchemaSnapshot {
   tables: TableInfo[];
+  triggers: TriggerInfo[];
+  routines: RoutineInfo[];
+}
+
+/** Schema objects that are not tables: introspected on open, not cached. */
+export interface SchemaObjects {
+  triggers: TriggerInfo[];
+  routines: RoutineInfo[];
 }
 
 /** A saved "favorite" block: reusable SQL referenced as `{{name}}`. */

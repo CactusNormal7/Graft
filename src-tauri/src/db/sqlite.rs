@@ -8,7 +8,7 @@ use futures_util::TryStreamExt;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteRow};
 use sqlx::{Column, ConnectOptions, Connection, Executor, Row, Statement};
 
-use super::schema::{ColumnInfo, ForeignKey, SchemaSnapshot, TableInfo};
+use super::schema::{ColumnInfo, ForeignKey, IndexInfo, SchemaSnapshot, TableInfo, TriggerInfo};
 use super::{elapsed_ms, returns_rows, utf16_offset, QueryResult, SqlError};
 
 /// Open a single connection to the database file. A pool would be overkill:
@@ -230,33 +230,101 @@ async fn table_foreign_keys(
         .collect())
 }
 
-/// Tables and views of the SQLite file at `db_path`.
+async fn table_indexes(
+    conn: &mut SqliteConnection,
+    table: &str,
+) -> Result<Vec<IndexInfo>, sqlx::Error> {
+    let entries: Vec<(String, bool, String)> =
+        sqlx::query_as("SELECT name, \"unique\", origin FROM pragma_index_list(?) ORDER BY seq")
+            .bind(table)
+            .fetch_all(&mut *conn)
+            .await?;
+    let mut indexes = Vec::with_capacity(entries.len());
+    for (name, unique, origin) in entries {
+        // `name` is NULL for expression columns.
+        let columns: Vec<(Option<String>,)> =
+            sqlx::query_as("SELECT name FROM pragma_index_info(?) ORDER BY seqno")
+                .bind(&name)
+                .fetch_all(&mut *conn)
+                .await?;
+        indexes.push(IndexInfo {
+            columns: columns
+                .into_iter()
+                .map(|(column,)| column.unwrap_or_else(|| "<expression>".into()))
+                .collect(),
+            name,
+            unique,
+            primary: origin == "pk",
+        });
+    }
+    Ok(indexes)
+}
+
+/// Timing and events of a `CREATE TRIGGER` statement (SQLite keeps only the
+/// SQL text). Timing defaults to BEFORE, as in SQLite.
+pub fn trigger_header(sql: &str) -> (String, String) {
+    let upper = sql.to_ascii_uppercase();
+    let words: Vec<&str> = upper.split_whitespace().collect();
+    let header: Vec<&str> = words.iter().copied().take_while(|w| *w != "ON").collect();
+    let timing = if header.windows(2).any(|w| w == ["INSTEAD", "OF"]) {
+        "INSTEAD OF"
+    } else if header.contains(&"AFTER") {
+        "AFTER"
+    } else {
+        "BEFORE"
+    };
+    let events: Vec<&str> = ["INSERT", "UPDATE", "DELETE"]
+        .into_iter()
+        .filter(|event| header.contains(event))
+        .collect();
+    (timing.to_string(), events.join(", "))
+}
+
+/// Tables, views, indexes and triggers of the SQLite file at `db_path`.
+/// (SQLite has no stored procedures.)
 pub async fn introspect(db_path: &str) -> Result<SchemaSnapshot, sqlx::Error> {
     let mut conn = connect(db_path).await?;
 
-    let entries: Vec<(String, String)> = sqlx::query_as(
-        "SELECT name, type FROM sqlite_master \
+    let entries: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT name, type, sql FROM sqlite_master \
          WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
          ORDER BY name",
     )
     .fetch_all(&mut conn)
     .await?;
 
-    let mut schema = Vec::with_capacity(entries.len());
-    for (name, kind) in entries {
+    let mut tables = Vec::with_capacity(entries.len());
+    for (name, kind, sql) in entries {
         let columns = table_columns(&mut conn, &name).await?;
         let foreign_keys = table_foreign_keys(&mut conn, &name).await?;
-        schema.push(TableInfo {
+        let indexes = table_indexes(&mut conn, &name).await?;
+        tables.push(TableInfo {
+            definition: if kind == "view" { sql } else { None },
             name,
             schema: None,
             kind,
             columns,
             foreign_keys,
+            indexes,
         });
     }
 
+    let trigger_rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        "SELECT name, tbl_name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
+    )
+    .fetch_all(&mut conn)
+    .await?;
+    let triggers = trigger_rows
+        .into_iter()
+        .map(|(name, table, sql)| {
+            let definition = sql.unwrap_or_default();
+            let (timing, events) = trigger_header(&definition);
+            TriggerInfo { name, table, schema: None, timing, events, definition }
+        })
+        .collect();
+
     conn.close().await?;
-    Ok(SchemaSnapshot { tables: schema })
+    Ok(SchemaSnapshot { tables, triggers, routines: Vec::new() })
 }
 
 #[cfg(test)]
@@ -288,12 +356,43 @@ mod tests {
         assert_eq!(empty.columns, vec!["id", "name"]);
         assert!(empty.rows.is_empty());
 
-        let schema = introspect(&db).await.unwrap().tables;
-        assert_eq!(schema.len(), 1);
+        run(
+            &db,
+            "CREATE UNIQUE INDEX t_name ON t (name);\
+             CREATE VIEW v AS SELECT name FROM t;\
+             CREATE TRIGGER t_audit AFTER UPDATE OF name ON t BEGIN SELECT 1; END;",
+            10,
+        )
+        .await
+        .unwrap();
+        let snapshot = introspect(&db).await.unwrap();
+        let schema = snapshot.tables;
+        assert_eq!(schema.len(), 2);
         assert_eq!(schema[0].columns.len(), 2);
         assert!(schema[0].columns[0].pk);
+        assert_eq!(schema[0].indexes.len(), 1);
+        assert_eq!(schema[0].indexes[0].columns, vec!["name"]);
+        assert!(schema[0].indexes[0].unique);
+        assert_eq!(schema[1].kind, "view");
+        assert!(schema[1].definition.as_deref().unwrap_or("").contains("SELECT name"));
+        assert_eq!(snapshot.triggers.len(), 1);
+        assert_eq!(snapshot.triggers[0].table, "t");
+        assert_eq!(snapshot.triggers[0].timing, "AFTER");
+        assert_eq!(snapshot.triggers[0].events, "UPDATE");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reads_trigger_headers() {
+        assert_eq!(
+            trigger_header("CREATE TRIGGER x INSTEAD OF INSERT ON v BEGIN SELECT 1; END"),
+            ("INSTEAD OF".into(), "INSERT".into())
+        );
+        assert_eq!(
+            trigger_header("create temp trigger if not exists x delete on t begin select 1; end"),
+            ("BEFORE".into(), "DELETE".into())
+        );
     }
 
     #[tokio::test]
