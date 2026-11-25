@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { pickSqliteFile } from "../native";
-import { DEFAULT_PORT, ENGINE_LABEL, connectionProblem, isServerEngine } from "../connection";
+import {
+  DEFAULT_PORT,
+  ENGINE_LABEL,
+  connectionProblem,
+  isServerEngine,
+  parseConnectionUrl,
+} from "../connection";
 import { errorMessage } from "./sqlDiagnostics";
 import type { ConnectionConfig, DbType, SslMode } from "../types";
 
@@ -46,6 +52,8 @@ export function ConnectionForm({
   sqlitePlaceholder = "Path to a .db / .sqlite file",
 }: ConnectionFormProps) {
   const [test, setTest] = useState<TestState>({ status: "idle" });
+  const [connectionUrl, setConnectionUrl] = useState("");
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   const update = (fields: Partial<ConnectionConfig>) => {
     setTest({ status: "idle" });
@@ -69,6 +77,23 @@ export function ConnectionForm({
     } catch (err) {
       setTest({ status: "failed", message: errorMessage(err) });
     }
+  };
+
+  /** Fills every server field from a pasted URL; the URL itself is not kept. */
+  const applyConnectionUrl = (input: string) => {
+    setConnectionUrl(input);
+    if (!input.trim()) {
+      setUrlError(null);
+      return;
+    }
+    const parsed = parseConnectionUrl(input);
+    if ("error" in parsed) {
+      setUrlError(parsed.error);
+      return;
+    }
+    setUrlError(null);
+    update(parsed.fields);
+    if (parsed.password !== undefined) onPasswordChange(parsed.password);
   };
 
   const browseSqlite = async () => {
@@ -113,6 +138,22 @@ export function ConnectionForm({
 
       {isServer && (
         <>
+          <div className="field">
+            <label className="label">Connection URL (optional)</label>
+            <input
+              className="input"
+              value={connectionUrl}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={
+                value.engine === "mysql"
+                  ? "mysql://user:password@host:3306/database"
+                  : "postgresql://user:password@host:5432/database"
+              }
+              onChange={(e) => applyConnectionUrl(e.currentTarget.value)}
+            />
+            {urlError && <span className="connection-form__failed">{urlError}</span>}
+          </div>
           <div className="connection-form__row">
             <div className="field connection-form__grow">
               <label className="label">Host</label>

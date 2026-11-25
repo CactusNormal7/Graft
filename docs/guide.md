@@ -60,7 +60,12 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
     - SQLite : **Database file** → *Browse* pour pointer un fichier
       `.db`/`.sqlite` **existant**, ou laisse vide pour créer un nouveau
       `<nom>.db` à côté du projet.
-    - PostgreSQL / MySQL : **hôte**, **port** (5432 / 3306 par défaut),
+    - PostgreSQL / MySQL : un champ **Connection URL** (optionnel) accepte
+      une URL complète — `postgresql://user:mdp@hote:5432/base?sslmode=require`
+      ou `mysql://…` — et remplit tous les champs ci-dessous (moteur compris) ;
+      l'URL elle-même n'est pas enregistrée, le mot de passe part au trousseau
+      comme s'il avait été tapé. Sinon, saisis champ par champ :
+      **hôte**, **port** (5432 / 3306 par défaut),
       **base** (obligatoire pour MySQL ; pour Postgres, par défaut celle du
       nom d'utilisateur), **utilisateur**, **mot de passe** et **SSL**
       (*Disable*, *Prefer* — défaut, *Require*, *Verify* = vérification du
