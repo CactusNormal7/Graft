@@ -42,7 +42,10 @@ pub const FILE_CANVAS: &[CommandItem] = &[
 ];
 pub const FILE_SAVE: &[CommandItem] = &[item("project.save", "Save", Some("CmdOrCtrl+S"))];
 pub const FILE_DATA: &[CommandItem] = &[item("data.import", "Import Data File…", None)];
-pub const FILE_HOME: &[CommandItem] = &[item("app.home", "Home Screen", Some("CmdOrCtrl+Shift+H"))];
+pub const FILE_HOME: &[CommandItem] = &[
+    item("claude.install", "Install in Claude Desktop…", None),
+    item("app.home", "Home Screen", Some("CmdOrCtrl+Shift+H")),
+];
 pub const EDIT_SQL: &[CommandItem] = &[
     item("block.run", "Run Block", Some("CmdOrCtrl+Enter")),
     item("block.runAll", "Run All Blocks", Some("CmdOrCtrl+Shift+Enter")),

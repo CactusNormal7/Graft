@@ -1,3 +1,4 @@
+mod claude_desktop;
 mod db_commands;
 mod dialogs;
 mod lsp;
@@ -92,6 +93,7 @@ pub fn run() {
             dialogs::confirm_dialog,
             set_unsaved_changes,
             registry_commands::register_project,
+            claude_desktop::install_claude_desktop,
             registry_commands::get_mcp_writes,
             registry_commands::set_mcp_writes,
             lsp::lsp_start,

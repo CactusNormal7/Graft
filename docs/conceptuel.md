@@ -85,10 +85,12 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
   (générer/exposer une API GraphQL depuis le schéma, type PostGraphile/Hasura),
   à phaser tard et en module ; **à proscrire** comme transport interne
   frontend↔backend (les commandes Tauri natives suffisent).
-- **Intégration Claude** : *besoin acté*, forme à détailler. Graft devra être
-  pilotable par Claude via un **serveur MCP** (local d'abord), puis un
-  **connecteur personnalisé** (MCP distant) pour claude.ai. Direction, surface
-  et garde-fous dans `docs/technique.md` § Intégration Claude.
+- **Intégration Claude** : *besoin acté*. Le **serveur MCP local**
+  (`graft-mcp`) est en place : Claude lit le schéma et les blocs, en crée, et
+  exécute des requêtes en **lecture seule** ; les écritures se débloquent
+  projet par projet dans l'app. Restent ouverts le **pont live** avec l'app
+  ouverte et le **connecteur distant** pour claude.ai. Détails dans
+  `docs/technique.md` § Intégration Claude.
 
 ## Trajectoire (roadmap)
 

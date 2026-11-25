@@ -10,7 +10,9 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lsp:install": "node scripts/install-sql-language-server.mjs"
+    "lsp:install": "node scripts/install-sql-language-server.mjs",
+    "sidecars": "node scripts/build-sidecars.mjs",
+    "tauri:build": "pnpm sidecars && tauri build --config src-tauri/tauri.bundle.conf.json"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

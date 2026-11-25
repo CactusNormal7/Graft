@@ -6,7 +6,8 @@
 import { useMemo } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { useGraftStore } from "./store/useGraftStore";
-import { showMessage } from "./dialogs/appDialogs";
+import { askConfirm, showError, showMessage } from "./dialogs/appDialogs";
+import { invoke } from "@tauri-apps/api/core";
 import type { BlockType } from "./types";
 
 export interface AppCommand {
@@ -46,6 +47,30 @@ const FIT_VIEW_DURATION_MS = 200;
 const always = () => true;
 const isCanvasShown = () => useGraftStore.getState().view === "canvas";
 const hasFocusedBlock = () => isCanvasShown() && useGraftStore.getState().focusedBlockId !== null;
+
+/** Register the bundled graft-mcp server in Claude Desktop's configuration. */
+async function installInClaudeDesktop() {
+  const isConfirmed = await askConfirm({
+    title: "Install in Claude Desktop",
+    message:
+      "Adds Graft's MCP server to Claude Desktop's configuration (your other settings are kept, " +
+      "and the previous file is backed up). Claude will see the projects you open in Graft, " +
+      "read-only unless you allow writes per project in the Connection dialog.",
+    okLabel: "Install",
+    isDanger: false,
+  });
+  if (!isConfirmed) return;
+  try {
+    const configPath = await invoke<string>("install_claude_desktop");
+    await showMessage({
+      title: "Installed",
+      message: `Written to ${configPath}.\n\nRestart Claude Desktop to use Graft.`,
+      tone: "info",
+    });
+  } catch (err) {
+    await showError("Could not install in Claude Desktop", String(err));
+  }
+}
 
 export function useAppCommands(): AppCommand[] {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
@@ -164,6 +189,12 @@ export function useAppCommands(): AppCommand[] {
         shortcut: SHORTCUTS.fitView,
         isEnabled: isCanvasShown,
         run: () => void fitView({ duration: FIT_VIEW_DURATION_MS }),
+      },
+      {
+        id: "claude.install",
+        label: "Install in Claude Desktop…",
+        isEnabled: always,
+        run: () => void installInClaudeDesktop(),
       },
       {
         id: "app.home",

@@ -103,7 +103,8 @@ Graft/
 ├── tsconfig.json
 ├── docs/                     # documentation vivante (ce dossier)
 ├── scripts/
-│   └── install-sql-language-server.mjs # `pnpm lsp:install` : installe le LSP pour l'utilisateur
+│   ├── install-sql-language-server.mjs # `pnpm lsp:install` : installe le LSP pour l'utilisateur
+│   └── build-sidecars.mjs    # `pnpm sidecars` : compile graft-mcp et le place en sidecar Tauri
 ├── src/                      # frontend React
 │   ├── main.tsx              # bootstrap : fonts + tokens + CSS React Flow + thème
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
@@ -181,10 +182,12 @@ Graft/
     │           ├── registry.rs # projets connus + autorisation d'écriture MCP par projet (hors du .graft)
     │           └── secrets.rs  # mots de passe dans le trousseau de l'OS (crate keyring)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
+    ├── tauri.bundle.conf.json # ajoutée au build de distribution : externalBin graft-mcp
     ├── capabilities/default.json  # permissions du webview : `core:default` uniquement
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
+        ├── claude_desktop.rs # « Install in Claude Desktop » : fusion de claude_desktop_config.json + tests
         ├── registry_commands.rs # register_project / get_mcp_writes / set_mcp_writes (registre des projets connus)
         ├── db_commands.rs    # commandes Tauri sur graft_core::db (execute_sql / introspect_schema / test_connection / mots de passe)
         ├── notebook.rs       # commandes fichiers (s'appuient sur graft_core::files ; chemins accordés), projets + tests
@@ -603,6 +606,7 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
 | `lsp_send` | `(message: String) -> Result<(), String>` | envoie un message JSON-RPC au serveur (réponses : événement `lsp-message`) |
 | `register_project` | `(path, name) -> Result<(), String>` | inscrit le projet dans le registre local (seuls ces projets sont accessibles au MCP) |
 | `get_mcp_writes` / `set_mcp_writes` | `(path[, allow])` | lit / règle l'autorisation d'écriture de Claude (MCP) pour le projet |
+| `install_claude_desktop` | `() -> Result<String, String>` | inscrit le sidecar `graft-mcp` dans la config de Claude Desktop ; renvoie le chemin du fichier écrit |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
@@ -916,7 +920,8 @@ Un nœud `group` (`GroupNode.tsx`, data `GroupBlockData { title, color }`) est u
 ```bash
 pnpm install        # deps frontend
 pnpm tauri dev      # lance l'app desktop (Vite + compile Rust + ouvre la fenêtre)
-pnpm tauri build    # build un binaire distribuable
+pnpm tauri:build    # build distribuable AVEC le sidecar graft-mcp (pnpm sidecars + config de bundle)
+pnpm tauri build    # build distribuable sans sidecar
 pnpm build          # type-check (tsc) + build frontend seul
 cargo check         # (dans src-tauri/) vérifie le backend Rust
 pnpm test           # tests frontend (Vitest, une passe)
@@ -1077,6 +1082,28 @@ ouverte**. `service.rs` porte la logique (testée sans le protocole),
   renvoyés ; `list_projects` ne donne que moteur + nom de base. Sur macOS, le
   Trousseau demandera une fois d'autoriser `graft-mcp` à lire le mot de passe
   (exécutable distinct de l'app).
+
+**Livraison — sidecar Tauri.** `pnpm sidecars` (`scripts/build-sidecars.mjs`)
+compile `graft-mcp` en release et le copie en
+`src-tauri/binaries/graft-mcp-<triplet hôte>[.exe]` (ignoré par Git).
+`pnpm tauri:build` enchaîne `pnpm sidecars` puis
+`tauri build --config src-tauri/tauri.bundle.conf.json`, qui ajoute
+`bundle.externalBin: ["binaries/graft-mcp"]` : Tauri installe le binaire **à
+côté de l'exécutable** de l'app (`Contents/MacOS/` sur macOS, dossier
+d'installation sur Windows). L'`externalBin` est dans une config à part pour
+que `pnpm tauri dev` et `cargo test` ne dépendent pas d'un binaire release
+préalable. À lancer sur chaque plateforme cible (build de l'hôte).
+
+**« Install in Claude Desktop… »** (menu File, palette) →
+`install_claude_desktop` (`src-tauri/src/claude_desktop.rs`) : trouve
+`graft-mcp` à côté de l'exécutable de l'app (en dev : `target/<profil>/`,
+après `cargo build -p graft-mcp`), puis écrit l'entrée
+`mcpServers.graft = { command, args: [] }` dans
+`<config>/Claude/claude_desktop_config.json` (`dirs::config_dir()` :
+`~/Library/Application Support` sur macOS, `%APPDATA%` sur Windows).
+`merge_config` garde tous les autres réglages et serveurs, **refuse** un
+fichier qui n'est pas un objet JSON plutôt que de l'écraser, et la version
+précédente est copiée en `claude_desktop_config.json.bak` ; écriture atomique.
 
 **Configuration manuelle** (Claude Desktop, `claude_desktop_config.json`) :
 

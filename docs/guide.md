@@ -298,6 +298,12 @@ peut alors lister tes projets, lire le schéma, lire/créer/modifier des blocs,
 exécuter des requêtes **en lecture seule**, expliquer un plan d'exécution ou
 générer des INSERT — **sans que l'app soit ouverte**.
 
+**Le plus simple** : dans Graft, menu **File ▸ Install in Claude Desktop…**
+(ou la palette ⌘K), puis redémarre Claude Desktop. Graft ajoute son serveur à
+la configuration de Claude Desktop en gardant tes autres réglages (l'ancien
+fichier est sauvegardé en `.bak`). Le serveur est livré avec l'app.
+
+**À la main** (ou en développement) :
 1. Construis le serveur : `cd src-tauri && cargo build --release -p graft-mcp`.
 2. Déclare-le dans `claude_desktop_config.json` (macOS :
    `~/Library/Application Support/Claude/`, Windows : `%APPDATA%\Claude\`) :
@@ -320,8 +326,11 @@ faits par Claude.
 ## 6. Construire un binaire distribuable
 
 ```bash
-pnpm tauri build
+pnpm tauri:build
 ```
+
+(compile aussi le serveur MCP `graft-mcp` et l'embarque dans l'app ; `pnpm tauri
+build` seul produit l'app sans lui.)
 
 Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 `.app`/`.dmg` sur macOS).
