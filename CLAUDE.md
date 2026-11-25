@@ -54,3 +54,60 @@ The design system itself lives in **Claude Design** (project "Wireframe applicat
 - **v0.2**: Monaco integrated in blocks, basic autocomplete (tables/columns), syntax highlighting, inline errors
 - **v0.3**: schema explorer, visual connections between blocks and tables, Postgres + MySQL support
 - **v1.0**: polished canvas UX (zoom, groups, named zones), differentiated block types, notebook export, Tauri desktop distribution
+
+<!-- clean-code-rules:start -->
+## Règles de clean code
+
+### Lisibilité
+- Le code est écrit pour être lu par des humains : la lisibilité passe avant l'astuce ou la concision.
+- Le nommage sert de documentation. Les commentaires sont réservés au *pourquoi* quand il n'est pas évident (contrainte métier, contournement, choix non intuitif), jamais au *quoi*.
+
+### Nommage
+- Nommage cohérent dans tout le projet, dans une seule langue (anglais par défaut, sauf convention contraire du projet).
+- Des verbes pour les fonctions (`fetchAudits`), des préfixes `is` / `has` / `can` pour les booléens.
+- Pas d'abréviations obscures (`usr`, `tmp2`, `d`).
+- Respecter les conventions du langage : camelCase en JS, PascalCase pour les composants Vue, snake_case en SQL.
+
+### Structure
+- Une fonction = une responsabilité. Des fonctions courtes.
+- KISS et YAGNI : la solution la plus simple qui marche, sans abstraction « au cas où ».
+- DRY sans excès : factoriser à partir de 3 répétitions.
+- Early return / guard clauses plutôt que des `if` imbriqués.
+- Pas de magic numbers ni de chaînes en dur : passer par des constantes nommées.
+- Supprimer le code mort au lieu de le commenter.
+
+### Cohérence avec l'existant
+- Lire le code voisin avant d'écrire, et suivre les conventions déjà en place.
+- Respecter la config du linter et du formateur (ESLint, Prettier) sans la modifier.
+- Ne pas ajouter de dépendance sans justification explicite.
+
+### Périmètre
+- Modifier ce qui est demandé.
+- Anticiper les impacts : si la modification touche d'autres parties (appelants, composants qui consomment une prop, types, requêtes SQL, API, tests, migrations), les identifier.
+- Adapter ce qui doit l'être pour que le changement reste cohérent et ne casse rien. Ne pas faire de refacto opportuniste sans rapport.
+- Faire un retour clair en fin de tâche : ce qui a été touché en dehors du périmètre initial et pourquoi, ce qui risque d'être impacté sans avoir été modifié, et ce qui mériterait d'être revu plus tard.
+- Demander quand la demande est ambiguë au lieu de deviner. Ne pas inventer d'API, de champs ou de tables : vérifier qu'ils existent.
+
+### Git et workflow
+Ces règles s'appliquent par défaut, **sauf demande explicite contraire de Jules** :
+- Branches par défaut : `main` = production, `staging` = préproduction. Les branches de travail partent de `staging`, sauf convention contraire du projet.
+- Nommage des branches en lien avec la feature : `feature/<description-courte>`, `fix/...`, `hotfix/...`, avec l'ID du ticket s'il y en a un.
+- Conventional Commits : `feat:`, `fix:`, `refactor:`, `chore:`, `docs:`, `test:`.
+- Commits atomiques : un commit = un changement logique.
+- Jamais de push direct sur `main` ou `staging` : tout passe par une PR, et un humain merge.
+- PR petites et décrites : quoi, pourquoi, comment tester.
+
+### Qualité et vérification
+- Lancer lint, build et tests avant de rendre la main.
+- Ajouter des tests pour toute nouvelle logique métier. Ne jamais supprimer ou affaiblir un test pour le faire passer.
+- Pas de `console.log` ni de code de debug dans ce qui est commité.
+
+### Erreurs et sécurité
+- Pas de `catch` vide : une erreur est soit gérée, soit remontée avec un message explicite.
+- Aucun secret en dur : tout passe par le `.env`, qui n'est jamais commité.
+- Requêtes SQL paramétrées, jamais de concaténation de valeurs utilisateur.
+- Valider les entrées côté API, même si le front valide déjà.
+
+### Communication
+- En fin de tâche : résumé des modifications, des impacts (voir Périmètre), des doutes et des choix faits.
+<!-- clean-code-rules:end -->
