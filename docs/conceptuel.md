@@ -42,9 +42,9 @@ classique), pas seulement un canvas plein écran :
   façon application desktop classique, sur **macOS et Windows** ;
 - le canvas comme **surface centrale** parmi d'autres vues, pas comme l'app entière.
 
-> Le squelette v0.1 actuel est volontairement minimal (canvas quasi nu) et **sera
-> revu** pour accueillir cette coquille. La direction design passera plus tard par
-> Claude Design.
+> La coquille v0.1 (toolbar + sidebar + canvas + onglets de pages + barre de
+> statut, écran d'accueil, barre de menus native) est en place, d'après le
+> wireframe Claude Design.
 
 ## Le modèle de blocs
 
@@ -59,8 +59,9 @@ Un **bloc** est une unité de SQL posée sur le canvas. Six types prévus :
 | `view` | vue |
 | `script` | script SQL libre |
 
-Les blocs peuvent être **connectés** entre eux et (à terme) aux **objets de schéma**
-(tables, colonnes). C'est précisément pourquoi le canvas repose sur un vrai modèle
+Les blocs peuvent être **connectés** entre eux et aux **objets de schéma** : une
+table posée sur le canvas est reliée automatiquement aux blocs dont le SQL
+l'utilise (liens visuels dérivés du SQL, sans ordre d'exécution). C'est précisément pourquoi le canvas repose sur un vrai modèle
 de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
 
 ## Ce que Graft n'est PAS (non-goals)
@@ -84,10 +85,13 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
   (générer/exposer une API GraphQL depuis le schéma, type PostGraphile/Hasura),
   à phaser tard et en module ; **à proscrire** comme transport interne
   frontend↔backend (les commandes Tauri natives suffisent).
-- **Intégration Claude** : *besoin acté*, forme à détailler. Graft devra être
-  pilotable par Claude via un **serveur MCP** (local d'abord), puis un
-  **connecteur personnalisé** (MCP distant) pour claude.ai. Direction, surface
-  et garde-fous dans `docs/technique.md` § Intégration Claude.
+- **Intégration Claude** : *besoin acté*. Le **serveur MCP local**
+  (`graft-mcp`) est en place : Claude lit le schéma et les blocs, en crée, et
+  exécute des requêtes en **lecture seule** ; les écritures se débloquent
+  projet par projet dans l'app. Quand l'app est ouverte, les blocs créés par
+  Claude y apparaissent **en direct** (pont local). Reste ouvert le
+  **connecteur distant** pour claude.ai. Détails dans
+  `docs/technique.md` § Intégration Claude.
 
 ## Trajectoire (roadmap)
 
@@ -97,6 +101,13 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
   tables/colonnes, Ctrl/Cmd+Entrée), erreurs inline. 🔶 *en cours* (l'éditeur,
   la coloration et l'autocomplétion schéma SQLite sont en place).
 - **v0.3** — explorateur de schéma, connexions visuelles blocs ↔ tables,
-  support Postgres + MySQL.
+  support Postgres + MySQL. ✅ *en place* (Postgres + MySQL branchés, mots de
+  passe dans le trousseau de l'OS, explorateur complet, tables posées sur le
+  canvas et reliées aux blocs qui les utilisent).
 - **v1.0** — UX canvas peaufinée (zoom, groupes, zones nommées), types de blocs
-  différenciés, export de notebook, distribution desktop Tauri.
+  différenciés, export de notebook, distribution desktop Tauri. *(Les groupes
+  conteneurs et les pages existent déjà.)*
+
+Fonctions livrées **hors roadmap** : vues de résultat `json` / `chart`, favoris
+`{{nom}}` réutilisables en sous-requête, palette ⌘K (sur les favoris), pont
+relationnel (INSERT multi-tables depuis un résultat ou un JSON imbriqué).

@@ -12,49 +12,16 @@
 //!   native dialog this session (see `scope.rs` and `dialogs.rs`).
 
 use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::Serialize;
 use tauri::State;
 
+use graft_core::files::{
+    project_paths, read_project, validate_project_name, write_atomic, write_project,
+};
+
 use crate::scope::{Access, FileScope};
-
-/// Extension of a Graft project file.
-const PROJECT_EXTENSION: &str = "graft";
-
-/// Characters rejected in a project name: path separators and the characters
-/// Windows forbids in file names (the strictest of the shipping targets).
-const FORBIDDEN_NAME_CHARS: &[char] = &['/', '\\', ':', '*', '?', '"', '<', '>', '|'];
-
-/// Write `contents` to `path` atomically: write a sibling temp file, then
-/// rename it over the target. A crash or a full disk mid-write leaves the
-/// previous file intact instead of a truncated project.
-fn write_atomic(path: &Path, contents: &str) -> io::Result<()> {
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
-    let mut tmp_name = file_name.to_os_string();
-    tmp_name.push(".tmp");
-    let tmp = path.with_file_name(tmp_name);
-
-    fs::write(&tmp, contents)?;
-    fs::rename(&tmp, path).inspect_err(|_| {
-        let _ = fs::remove_file(&tmp);
-    })
-}
-
-/// `Ok` when `path` names a `.graft` project file.
-fn require_project_file(path: &Path) -> Result<(), String> {
-    let is_project = path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case(PROJECT_EXTENSION));
-    if is_project {
-        Ok(())
-    } else {
-        Err(format!("not a .{PROJECT_EXTENSION} project file: {}", path.display()))
-    }
-}
 
 fn write_granted(scope: &FileScope, path: &Path, contents: &str) -> Result<(), String> {
     scope.check(Access::Write, path)?;
@@ -85,17 +52,30 @@ pub fn read_text_file(scope: State<'_, FileScope>, path: String) -> Result<Strin
 /// Write notebook JSON (atomically) to a `.graft` file.
 #[tauri::command]
 pub fn save_notebook(path: String, contents: String) -> Result<(), String> {
-    let path = Path::new(&path);
-    require_project_file(path)?;
-    write_atomic(path, &contents).map_err(|e| e.to_string())
+    write_project(Path::new(&path), &contents)
 }
 
 /// Read notebook JSON from a `.graft` file.
 #[tauri::command]
 pub fn load_notebook(path: String) -> Result<String, String> {
+    read_project(Path::new(&path))
+}
+
+/// Last modification time of a `.graft` file, in milliseconds since the
+/// epoch: polled by the app to notice edits made by another program (the MCP
+/// server) without re-reading the whole file.
+#[tauri::command]
+pub fn project_file_stamp(path: String) -> Result<u64, String> {
     let path = Path::new(&path);
-    require_project_file(path)?;
-    fs::read_to_string(path).map_err(|e| e.to_string())
+    graft_core::files::require_project_file(path)?;
+    let modified = fs::metadata(path)
+        .and_then(|m| m.modified())
+        .map_err(|e| e.to_string())?;
+    let millis = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?
+        .as_millis();
+    Ok(u64::try_from(millis).unwrap_or(u64::MAX))
 }
 
 /// Default directory for new projects: `<Documents|Home>/Graft`, created if missing.
@@ -114,32 +94,6 @@ pub fn default_project_dir() -> Result<String, String> {
 pub struct ProjectPaths {
     pub project_path: String,
     pub db_path: String,
-}
-
-/// A project name must be usable as a file name on every target platform.
-fn validate_project_name(name: &str) -> Result<(), String> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return Err("project name is empty".into());
-    }
-    if trimmed == "." || trimmed == ".." {
-        return Err("project name cannot be \".\" or \"..\"".into());
-    }
-    if let Some(c) = trimmed
-        .chars()
-        .find(|c| FORBIDDEN_NAME_CHARS.contains(c) || c.is_control())
-    {
-        return Err(format!("project name cannot contain {c:?}"));
-    }
-    Ok(())
-}
-
-fn project_paths(dir: &Path, name: &str) -> (PathBuf, PathBuf) {
-    let name = name.trim();
-    (
-        dir.join(format!("{name}.graft")),
-        dir.join(format!("{name}.db")),
-    )
 }
 
 /// Derive the `.graft` and `.db` paths for a project named `name` in `dir`
@@ -168,22 +122,12 @@ pub fn create_project_paths(dir: String, name: String) -> Result<ProjectPaths, S
 mod tests {
     use super::*;
 
-    fn scratch_dir(tag: &str) -> PathBuf {
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("graft-nb-{tag}-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    #[test]
-    fn rejects_unsafe_project_names() {
-        assert!(validate_project_name("analytics").is_ok());
-        assert!(validate_project_name("my project 2").is_ok());
-        assert!(validate_project_name("  ").is_err());
-        assert!(validate_project_name("..").is_err());
-        assert!(validate_project_name("../escape").is_err());
-        assert!(validate_project_name("a\\b").is_err());
-        assert!(validate_project_name("what?").is_err());
-    }
 
     #[test]
     fn refuses_to_overwrite_an_existing_project() {
@@ -224,14 +168,4 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn atomic_write_replaces_contents_and_leaves_no_temp_file() {
-        let dir = scratch_dir("atomic");
-        let file = dir.join("n.graft");
-        write_atomic(&file, "one").unwrap();
-        write_atomic(&file, "two").unwrap();
-        assert_eq!(fs::read_to_string(&file).unwrap(), "two");
-        assert!(!dir.join("n.graft.tmp").exists());
-        fs::remove_dir_all(&dir).ok();
-    }
 }

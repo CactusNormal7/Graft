@@ -1,8 +1,20 @@
-import { describe, expect, it } from "vitest";
-import { quoteIdent, sqlEquals, sqlLiteral } from "./sqlFormat";
+import { afterEach, describe, expect, it } from "vitest";
+import { qualifiedName, quoteIdent, setSqlDialect, sqlEquals, sqlLiteral } from "./sqlFormat";
 import { basename } from "./paths";
 
 describe("sqlFormat", () => {
+  afterEach(() => setSqlDialect("sqlite"));
+
+  it("quotes for the active engine", () => {
+    setSqlDialect("mysql");
+    expect(quoteIdent("we`ird")).toBe("`we``ird`");
+    expect(qualifiedName("t", "shop")).toBe("`shop`.`t`");
+    setSqlDialect("postgres");
+    expect(qualifiedName("orders", "sales")).toBe('"sales"."orders"');
+    expect(qualifiedName("orders")).toBe('"orders"');
+    expect(sqlLiteral(false)).toBe("FALSE");
+  });
+
   it("escapes identifiers and literals", () => {
     expect(quoteIdent('we"ird')).toBe('"we""ird"');
     expect(sqlLiteral("it's")).toBe("'it''s'");

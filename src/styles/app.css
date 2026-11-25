@@ -219,7 +219,8 @@ button {
    Buttons
    --------------------------------------------------------------------------- */
 .btn,
-.btn-accent {
+.btn-accent,
+.btn-danger {
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
   padding: 3px 10px;
@@ -251,8 +252,20 @@ button {
   border-color: var(--accent-hover);
 }
 
+.btn-danger {
+  background: var(--error-dim);
+  border: 1px solid var(--error);
+  color: var(--error);
+}
+
+.btn-danger:hover:not(:disabled) {
+  color: var(--error-hover);
+  border-color: var(--error-hover);
+}
+
 .btn:disabled,
-.btn-accent:disabled {
+.btn-accent:disabled,
+.btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -320,6 +333,7 @@ button {
 .badge--trigger   { background: var(--block-trigger-bg);   color: var(--block-trigger-text);   border-color: var(--block-trigger-border); }
 .badge--view      { background: var(--block-view-bg);      color: var(--block-view-text);      border-color: var(--block-view-border); }
 .badge--script    { background: var(--block-script-bg);    color: var(--block-script-text);    border-color: var(--block-script-border); }
+.badge--command   { background: var(--accent-dim);           color: var(--accent);               border-color: var(--accent-dim); }
 .badge--result    { background: var(--panel-3);              color: var(--muted);                border-color: var(--border-2); }
 
 /* ---------------------------------------------------------------------------
@@ -1371,6 +1385,12 @@ button {
 
 .palette__name { color: var(--accent-text); white-space: nowrap; }
 
+.palette__shortcut {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
 .palette__sql {
   color: var(--muted);
   font-size: var(--text-xs);
@@ -1766,6 +1786,9 @@ button {
 .modal {
   width: 460px;
   max-width: calc(100vw - 48px);
+  /* The connection form can outgrow a small window: scroll inside. */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-xl);
@@ -1872,4 +1895,239 @@ button {
   stroke: var(--accent);
   stroke-dasharray: 4 3;
   opacity: 0.5;
+}
+
+/* In-app dialogs (src/dialogs) — replace the webview's alert/confirm/prompt. */
+.app-dialog--error {
+  border-color: var(--error);
+}
+
+.app-dialog--error .modal__title {
+  color: var(--error-text);
+}
+
+.app-dialog__message {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow: auto;
+}
+
+/* Connection form (src/components/ConnectionForm.tsx) */
+.connection-form__row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+
+.connection-form__grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.connection-form__port {
+  width: 88px;
+}
+
+.connection-form__test {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+  font-size: var(--text-xs);
+}
+
+.connection-form__ok {
+  color: var(--success);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-form__failed {
+  color: var(--error-text);
+  overflow-wrap: anywhere;
+}
+
+.toolbar__connection {
+  color: var(--success);
+  border-color: var(--success-dim);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar__connection.is-failing {
+  color: var(--error);
+  border-color: var(--error-dim);
+}
+
+.sidebar__error {
+  color: var(--error-text);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* Schema explorer sections and object details (src/components/Sidebar.tsx) */
+.schema-section {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: var(--space-2);
+  padding: 2px 4px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.schema-section:hover { color: var(--text-2); }
+
+.schema-section__label { flex: 1; }
+
+.schema-col {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.schema-col__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schema-col__type {
+  margin-left: auto;
+  color: var(--muted-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+
+.schema-flag {
+  font-size: 9px;
+  line-height: 1;
+  padding: 1px 3px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.schema-flag--pk { color: var(--warning); border-color: var(--warning-dim); }
+.schema-flag--fk { color: var(--info); border-color: var(--info-dim); }
+
+.schema-detail {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.schema-detail__kind {
+  color: var(--muted-2);
+}
+
+.schema-object {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 4px 2px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.schema-object:hover { background: var(--panel-2); }
+
+.schema-object__name {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schema-object__detail {
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+}
+
+/* Table nodes on the canvas (src/canvas/TableNodeView.tsx) */
+.table-node {
+  background: var(--panel);
+  border: 1px solid var(--info-dim);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  font-family: var(--font-mono);
+  overflow: hidden;
+}
+
+.table-node.selected { border-color: var(--info); }
+.table-node.is-missing { border-style: dashed; opacity: 0.7; }
+
+.table-node__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.table-node__kind {
+  font-size: 9px;
+  color: var(--info);
+  text-transform: uppercase;
+}
+
+.table-node__name {
+  flex: 1;
+  color: var(--text);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-node__missing,
+.table-node__more {
+  padding: 2px 8px;
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+}
+
+.table-node__columns { padding: 4px 0; }
+
+.table-node__column {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+.table-node__column-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-node__type {
+  margin-left: auto;
+  color: var(--muted-2);
+  white-space: nowrap;
+}
+
+.connection-form__permission {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  cursor: pointer;
 }

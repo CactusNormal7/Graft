@@ -17,15 +17,22 @@ import {
   pickProjectFile,
   setUnsavedChanges,
 } from "../native";
-import { insertIntoEditor } from "../canvas/editorRegistry";
+import { insertIntoEditor, replaceEditorContent } from "../canvas/editorRegistry";
+import { formatSql } from "../formatSql";
+import { connectionFromFile } from "../connection";
+import { mergeExternalBlocks } from "./externalMerge";
+import { referencedKeysOnPage } from "../canvas/tableLinks";
+import { tableKey } from "../canvas/tableRefs";
+import { askConfirm, showError, showMessage } from "../dialogs/appDialogs";
 import { expandSnippets, toSnippetName } from "./snippets";
+import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
-import { quoteIdent } from "../sqlFormat";
+import { qualifiedName, setSqlDialect } from "../sqlFormat";
 import type {
   BlockType,
   ChartConfig,
+  ConnectionConfig,
   DbSchema,
-  DbType,
   GroupBlockData,
   NotebookEdge,
   NotebookFile,
@@ -33,9 +40,14 @@ import type {
   QueryResult,
   RecentProject,
   ResultBlockData,
+  SavedConnection,
+  SchemaObjects,
+  SchemaSnapshot,
   ResultView,
   Snippet,
   SqlBlockData,
+  TableInfo,
+  TableNodeData,
 } from "../types";
 
 /** A canvas node whose data is a SQL block. */
@@ -48,7 +60,11 @@ export type ResultNode = Node<ResultBlockData, "resultBlock">;
 export type GroupNode = Node<GroupBlockData, "group">;
 
 /** Anything that can live on the canvas. */
-export type AnyNode = SqlNode | ResultNode | GroupNode;
+/** A schema table shown on the canvas (target of derived block links). */
+export type TableNode = Node<TableNodeData, "tableNode">;
+
+/** Anything that can live on the canvas. */
+export type AnyNode = SqlNode | ResultNode | GroupNode | TableNode;
 
 /** A page (Excel-like sheet): its own canvas of nodes + edges. */
 export interface Page {
@@ -61,6 +77,7 @@ export interface Page {
 const isSqlNode = (n: AnyNode): n is SqlNode => n.type === "sqlBlock";
 const isResultNode = (n: AnyNode): n is ResultNode => n.type === "resultBlock";
 const isGroupNode = (n: AnyNode): n is GroupNode => n.type === "group";
+const isTableNode = (n: AnyNode): n is TableNode => n.type === "tableNode";
 
 /** Keep group (parent) nodes ahead of blocks in the array — React Flow requires
  *  a parent to precede its children, and it makes groups render behind. */
@@ -78,6 +95,15 @@ const DEFAULT_BLOCK_HEIGHT = 300;
 /** Linked result blocks get a bit more room (they're all result). */
 const DEFAULT_RESULT_WIDTH = 640;
 const DEFAULT_RESULT_HEIGHT = 360;
+
+/** Width of a table node (its height follows the column list). */
+const TABLE_NODE_WIDTH = 220;
+/** Gap between the table column added by `addReferencedTables` and the blocks. */
+const TABLE_COLUMN_GAP = 120;
+const TABLE_NODE_SPACING = 40;
+/** Rough height of a table node, to stack them without overlap. */
+const TABLE_NODE_ROW_HEIGHT = 22;
+const TABLE_NODE_HEADER_HEIGHT = 40;
 
 /** Default container size for a new group. */
 const DEFAULT_GROUP_WIDTH = 480;
@@ -152,9 +178,10 @@ interface GraftState {
   projectName: string | null;
   /** Absolute path to the current `.graft` file, or null if unsaved. */
   projectPath: string | null;
-  dbType: DbType;
-  /** Path to the connected database file (SQLite), or null if none. */
-  dbPath: string | null;
+  /** What the project connects to; null when it has no database. */
+  connection: ConnectionConfig | null;
+  /** Why the last introspection failed (unreachable server, bad password…). */
+  schemaError: string | null;
 
   /** Introspected schema: table/view name → column names (for autocompletion).
    *  Derived from `dbSchema` — kept flat because that's what CodeMirror and the
@@ -163,6 +190,8 @@ interface GraftState {
   /** Full database structure (types, PKs, foreign keys). Introspected at
    *  project create/open, refreshed after DDL, and cached in the `.graft`. */
   dbSchema: DbSchema;
+  /** Triggers and routines of the database (not cached in the `.graft`). */
+  schemaObjects: SchemaObjects;
 
   /** Saved favorite blocks, usable as `{{name}}` inside other queries. */
   snippets: Snippet[];
@@ -181,6 +210,20 @@ interface GraftState {
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
 
+  /** Whether the "New project" modal is shown (home button or File menu). */
+  isNewProjectModalOpen: boolean;
+  /** Connection the "New project" modal starts from (a saved connection). */
+  newProjectConnection: ConnectionConfig | null;
+  setNewProjectModalOpen: (isOpen: boolean, connection?: ConnectionConfig | null) => void;
+
+  /** Named connections of the local library, reusable across projects. */
+  savedConnections: SavedConnection[];
+  loadSavedConnections: () => Promise<void>;
+  /** Add (or update, same id) a named connection in the library. */
+  saveNamedConnection: (name: string, connection: ConnectionConfig) => Promise<void>;
+  /** Remove a named connection (its keychain password is kept). */
+  deleteSavedConnection: (id: string) => Promise<void>;
+
   onNodesChange: (changes: NodeChange<AnyNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
@@ -189,12 +232,17 @@ interface GraftState {
   /** Return to the canvas of the project still loaded (from the home screen). */
   resumeProject: () => void;
   /** Resolves to false when the user chose to keep their unsaved changes. */
+  /** `connection.path` empty for SQLite → `<dir>/<name>.db`. `password` (server
+   *  engines) goes to the OS keychain, never to the project file. */
   createProject: (
     name: string,
     dir: string,
-    dbType: DbType,
-    dbPathOverride?: string | null,
+    connection: ConnectionConfig,
+    password?: string,
   ) => Promise<boolean>;
+  /** Replace the project's connection (connection dialog); `password` set →
+   *  stored in the keychain. Refreshes the schema. */
+  updateConnection: (connection: ConnectionConfig, password?: string) => Promise<void>;
   openProjectByPath: (projectPath: string) => Promise<void>;
   openProjectFromDialog: () => Promise<void>;
   removeRecent: (projectPath: string) => void;
@@ -232,7 +280,12 @@ interface GraftState {
   toggleCollapse: (id: string) => void;
   /** Create a query block pre-filled with `SELECT * FROM <table> LIMIT 100`
    *  and run it immediately (double-click a table in the sidebar). */
-  addSelectBlock: (table: string) => void;
+  addSelectBlock: (table: string, schema?: string) => void;
+  /** Put a schema table on the canvas (no-op if it is already on the page). */
+  addTableNode: (table: string, schema?: string) => void;
+  /** Add a node for every table referenced by the page's blocks and missing
+   *  from it, stacked left of the blocks. Returns how many were added. */
+  addReferencedTables: () => number;
 
   // --- Group containers ---
   addGroup: () => void;
@@ -249,6 +302,11 @@ interface GraftState {
     position: { x: number; y: number },
   ) => void;
   updateSql: (id: string, sql: string) => void;
+  /** Pretty-print a block's SQL for the project's engine (undoable in the
+   *  editor). Leaves the SQL untouched when it cannot be parsed. */
+  formatBlock: (id: string) => void;
+  /** `formatBlock` on the block whose editor last had focus. */
+  formatFocusedBlock: () => void;
   updateTitle: (id: string, title: string) => void;
   setResultView: (id: string, view: ResultView) => void;
   setChartConfig: (id: string, config: ChartConfig) => void;
@@ -260,8 +318,14 @@ interface GraftState {
   runBlock: (id: string) => Promise<void>;
   runAll: () => Promise<void>;
 
-  /** Write the project to its `.graft` file; reports failures to the user. */
+  /** Write the project to its `.graft` file; reports failures to the user.
+   *  Asks first when another program changed the file meanwhile. */
   saveNotebook: () => Promise<void>;
+  /** Poll target: merge blocks changed by another program (graft-mcp), or
+   *  offer to reload when that can't be done safely. */
+  checkProjectFile: () => Promise<void>;
+  /** The live bridge reports that `path` changed: check it right away. */
+  notifyProjectChanged: (path: string) => void;
 }
 
 /** Immutably patch the data of a single node (works for any node kind — the
@@ -276,11 +340,14 @@ function patchNode(
   );
 }
 
-/** Flatten the rich schema into the `table → column names` map CodeMirror and
- *  the sidebar consume. */
+/** Flatten the rich schema into the `table → column names` map CodeMirror
+ *  completes from. Tables outside the default schema are keyed
+ *  `schema.table`, which CodeMirror reads as a nested namespace. */
 function flattenSchema(dbSchema: DbSchema): Record<string, string[]> {
   const out: Record<string, string[]> = {};
-  for (const t of dbSchema) out[t.name] = t.columns.map((c) => c.name);
+  for (const t of dbSchema) {
+    out[t.schema ? `${t.schema}.${t.name}` : t.name] = t.columns.map((c) => c.name);
+  }
   return out;
 }
 
@@ -305,12 +372,16 @@ function buildInsertScript(
 ): { title: string; sql: string } | null {
   const result = resultOf(state, blockId);
   if (!result || result.columns.length === 0 || result.rows.length === 0) {
-    alert("Run a query that returns rows first.");
+    void showMessage({
+      title: "No rows to convert",
+      message: "Run a query that returns rows first.",
+      tone: "info",
+    });
     return null;
   }
   const { sql, warnings } = generateInserts(result, state.dbSchema);
   if (!sql.trim()) {
-    alert(`Nothing to generate:\n${warnings.join("\n")}`);
+    void showMessage({ title: "Nothing to generate", message: warnings.join("\n"), tone: "info" });
     return null;
   }
   const node = state.nodes.find((n) => n.id === blockId);
@@ -332,6 +403,24 @@ function staggeredPosition(index: number): { x: number; y: number } {
   return {
     x: 80 + (index % 4) * (DEFAULT_BLOCK_WIDTH + BLOCK_GAP),
     y: 80 + Math.floor(index / 4) * (DEFAULT_BLOCK_HEIGHT + BLOCK_GAP),
+  };
+}
+
+function tableKeyOf(node: TableNode): string {
+  return tableKey({ name: node.data.table, schema: node.data.schema });
+}
+
+function newTableNode(
+  table: string,
+  schema: string | undefined,
+  position: { x: number; y: number },
+): TableNode {
+  return {
+    id: nextId(),
+    type: "tableNode",
+    position,
+    width: TABLE_NODE_WIDTH,
+    data: schema ? { table, schema } : { table },
   };
 }
 
@@ -398,9 +487,9 @@ function serializeNodes(nodes: AnyNode[]): NotebookNode[] {
     // Reset transient execution state (blocks only) so saved files stay
     // diff-friendly. Group nodes carry no execution state.
     data:
-      n.type === "group"
+      n.type === "group" || n.type === "tableNode"
         ? n.data
-        : { ...n.data, status: "idle", result: null, error: null },
+        : { ...n.data, status: "idle", result: null, error: null, editorError: undefined },
   })) as NotebookNode[];
 }
 
@@ -418,6 +507,17 @@ function deserializeNodes(rawNodes: NotebookNode[] | undefined): AnyNode[] {
       // Always give nodes explicit dimensions: files saved before sizes were
       // set would otherwise measure themselves against their content and blow
       // up (a wide result table, a long generated script…).
+      // Table nodes size themselves to their column list: width only.
+      if (kind === "tableNode") {
+        return {
+          id: n.id,
+          type: kind,
+          position: n.position,
+          ...(n.parentId ? { parentId: n.parentId } : {}),
+          data: n.data,
+          width: TABLE_NODE_WIDTH,
+        } as AnyNode;
+      }
       const isGroup = kind === "group";
       const isResult = kind === "resultBlock";
       const fallbackWidth = isGroup
@@ -478,10 +578,11 @@ function pagesFromFile(file: NotebookFile): Page[] {
 function serializeNotebook(state: GraftState): NotebookFile {
   const pages = commitActivePage(state);
   return {
-    version: 5,
+    version: 6,
     name: state.projectName ?? "untitled",
-    dbType: state.dbType,
-    dbPath: state.dbPath,
+    dbType: state.connection?.engine ?? "sqlite",
+    dbPath: state.connection?.engine === "sqlite" ? (state.connection.path ?? null) : null,
+    connection: state.connection ?? undefined,
     // Cached so relations are known at open without re-introspecting.
     dbSchema: state.dbSchema,
     snippets: state.snippets,
@@ -495,6 +596,7 @@ function serializeNotebook(state: GraftState): NotebookFile {
 }
 
 const INITIAL_PAGE_ID = "page-initial";
+const EMPTY_SCHEMA_OBJECTS: SchemaObjects = { triggers: [], routines: [] };
 
 // --- Unsaved changes ---------------------------------------------------------
 // The project is "dirty" when what would be written to disk differs from what
@@ -515,10 +617,120 @@ export function hasUnsavedChanges(state: GraftState): boolean {
   return savedFingerprint !== null && fingerprint(state) !== savedFingerprint;
 }
 
-/** Record the current state as the saved baseline. */
-function markSaved(get: () => GraftState, set: (partial: Partial<GraftState>) => void) {
+/** Record the current state as the saved baseline; `contents` is the text
+ *  now on disk (just written or read). */
+function markSaved(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  contents: string,
+) {
   savedFingerprint = fingerprint(get());
+  diskContents = contents;
   set({ dirty: false });
+}
+
+// --- Changes made outside the app (e.g. Claude through graft-mcp) ----------
+/** Project file text as the app last read or wrote it. A different text on
+ *  disk means another program changed the file. */
+let diskContents: string | null = null;
+/** Modification stamp last seen by `checkProjectFile`. */
+let lastDiskStamp: number | null = null;
+/** True while the reload question is on screen (polling must not re-ask). */
+let isAskingAboutDisk = false;
+
+/**
+ * Merge blocks another program changed (`contents` = the file now) into the
+ * open project, keeping unsaved edits (see `externalMerge.ts`). False when it
+ * can't be done safely: the caller asks the user instead.
+ */
+function mergeExternalChange(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  contents: string,
+): boolean {
+  if (diskContents === null) return false;
+  let base: NotebookFile;
+  let theirs: NotebookFile;
+  try {
+    base = JSON.parse(diskContents) as NotebookFile;
+    theirs = JSON.parse(contents) as NotebookFile;
+  } catch {
+    return false; // Unparseable on either side: let the user decide.
+  }
+  const state = get();
+  const hadUnsavedChanges = hasUnsavedChanges(state);
+  const merged = mergeExternalBlocks(base, theirs, commitActivePage(state), (node) =>
+    deserializeNodes([node])[0],
+  );
+  if (!merged) return false;
+  const pages = state.pages.map((page) => {
+    const mergedPage = merged.find((m) => m.id === page.id);
+    return mergedPage ? { ...page, nodes: sortGroupsFirst(mergedPage.nodes) } : page;
+  });
+  const active = pages.find((page) => page.id === state.activePageId) ?? pages[0];
+  set({ pages, nodes: active.nodes });
+  // Without local edits the app now matches the file; otherwise it stays
+  // dirty, and the merged result is what the next save writes.
+  if (hadUnsavedChanges) diskContents = contents;
+  else markSaved(get, set, contents);
+  return true;
+}
+
+/** Apply a project file read from disk to the store (open or reload). */
+function applyProjectFile(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  projectPath: string,
+  contents: string,
+) {
+  const file = JSON.parse(contents) as NotebookFile;
+  const pages = pagesFromFile(file);
+  const active = pages[0];
+  const name = file.name ?? "untitled";
+  const connection = connectionFromFile(file);
+  set({
+    view: "canvas",
+    projectName: name,
+    projectPath,
+    connection,
+    schemaError: null,
+    pages,
+    activePageId: active.id,
+    nodes: active.nodes,
+    edges: active.edges,
+    // Use the cached structure immediately; refreshSchema() then reconciles
+    // it with the database as it is right now.
+    dbSchema: file.dbSchema ?? [],
+    schema: flattenSchema(file.dbSchema ?? []),
+    schemaObjects: EMPTY_SCHEMA_OBJECTS,
+    snippets: file.snippets ?? [],
+    focusedBlockId: null,
+  });
+  markSaved(get, set, contents);
+  touchRecent(get, set, recentEntry(name, projectPath, connection));
+  void get().refreshSchema();
+}
+
+/** Before saving: if another program changed the file since we last read or
+ *  wrote it, ask before overwriting. True means "go ahead". */
+async function confirmOverwrite(projectPath: string): Promise<boolean> {
+  if (diskContents === null) return true;
+  let onDisk: string;
+  try {
+    onDisk = await invoke<string>("load_notebook", { path: projectPath });
+  } catch {
+    return true; // Gone or unreadable: writing it back is the right call.
+  }
+  if (onDisk === diskContents) return true;
+  return askConfirm({
+    title: "Overwrite changes made outside Graft?",
+    message:
+      "The project file was modified by another program since you opened it " +
+      "(for example Claude through the Graft MCP server). Saving replaces those changes. " +
+      "Cancel, then reload the project (File ▸ Open) to keep them.",
+    okLabel: "Overwrite",
+    isDanger: true,
+  });
 }
 
 /** If unsaved changes would be lost, ask the user. True means "go ahead". */
@@ -540,17 +752,44 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   activePageId: INITIAL_PAGE_ID,
   projectName: null,
   projectPath: null,
-  dbType: "sqlite",
-  dbPath: null,
+  connection: null,
+  schemaError: null,
   schema: {},
   dbSchema: [],
+  schemaObjects: EMPTY_SCHEMA_OBJECTS,
   snippets: [],
   focusedBlockId: null,
   recentProjects: loadRecents(),
   dirty: false,
   paletteOpen: false,
+  isNewProjectModalOpen: false,
+  newProjectConnection: null,
+  savedConnections: [],
 
   setPaletteOpen: (open) => set({ paletteOpen: open }),
+  setNewProjectModalOpen: (isOpen, connection = null) =>
+    set({ isNewProjectModalOpen: isOpen, newProjectConnection: isOpen ? connection : null }),
+
+  loadSavedConnections: async () => {
+    try {
+      set({ savedConnections: await invoke<SavedConnection[]>("list_saved_connections") });
+    } catch (err) {
+      void showError("Could not read the saved connections", String(err));
+    }
+  },
+
+  saveNamedConnection: async (name, connection) => {
+    const savedConnections = await invoke<SavedConnection[]>("save_connection", { name, connection });
+    set({ savedConnections });
+  },
+
+  deleteSavedConnection: async (id) => {
+    try {
+      set({ savedConnections: await invoke<SavedConnection[]>("delete_saved_connection", { id }) });
+    } catch (err) {
+      void showError("Could not remove the saved connection", String(err));
+    }
+  },
 
   onNodesChange: (changes) =>
     set({ nodes: applyNodeChanges(changes, get().nodes) }),
@@ -624,20 +863,18 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     set({ recentProjects: next });
   },
 
-  createProject: async (name, dir, dbType, dbPathOverride) => {
+  createProject: async (name, dir, connectionDraft, password) => {
     if (!(await confirmDiscard(get()))) return false;
     const paths = await invoke<{ projectPath: string; dbPath: string }>(
       "create_project_paths",
       { dir, name },
     );
-    // SQLite: use the chosen existing/explicit file if given, else create
-    // <name>.db next to the project. Other engines have no file path (v0.3).
-    const dbPath =
-      dbType === "sqlite"
-        ? dbPathOverride && dbPathOverride.trim()
-          ? dbPathOverride.trim()
-          : paths.dbPath
-        : null;
+    // SQLite without an explicit file: create <name>.db next to the project.
+    const connection: ConnectionConfig =
+      connectionDraft.engine === "sqlite" && !connectionDraft.path?.trim()
+        ? { ...connectionDraft, path: paths.dbPath }
+        : connectionDraft;
+    if (password) await storePassword(connection.id, password);
 
     const pageId = nextPageId();
     set({
@@ -648,10 +885,11 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       activePageId: pageId,
       projectName: name,
       projectPath: paths.projectPath,
-      dbType,
-      dbPath,
+      connection,
       dbSchema: [],
+      schemaObjects: EMPTY_SCHEMA_OBJECTS,
       schema: {},
+      schemaError: null,
       snippets: [],
       focusedBlockId: null,
     });
@@ -661,55 +899,31 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     await get().refreshSchema();
 
     // Persist the (empty) project immediately so it is reopenable.
-    await invoke("save_notebook", {
-      path: paths.projectPath,
-      contents: JSON.stringify(serializeNotebook(get()), null, 2),
-    });
-    markSaved(get, set);
-    touchRecent(get, set, {
-      name,
-      projectPath: paths.projectPath,
-      dbType,
-      dbPath,
-    });
+    const contents = JSON.stringify(serializeNotebook(get()), null, 2);
+    await invoke("save_notebook", { path: paths.projectPath, contents });
+    markSaved(get, set, contents);
+    lastDiskStamp = null;
+    touchRecent(get, set, recentEntry(name, paths.projectPath, connection));
     return true;
+  },
+
+  updateConnection: async (connection, password) => {
+    if (password) await storePassword(connection.id, password);
+    set({ connection, schemaError: null });
+    await get().refreshSchema();
   },
 
   openProjectByPath: async (projectPath) => {
     if (!(await confirmDiscard(get()))) return;
     try {
       const contents = await invoke<string>("load_notebook", { path: projectPath });
-      const file = JSON.parse(contents) as NotebookFile;
-      const pages = pagesFromFile(file);
-      const active = pages[0];
-      const name = file.name ?? "untitled";
-      const dbType = file.dbType ?? "sqlite";
-      const dbPath = file.dbPath ?? null;
-      set({
-        view: "canvas",
-        projectName: name,
-        projectPath,
-        dbType,
-        dbPath,
-        pages,
-        activePageId: active.id,
-        nodes: active.nodes,
-        edges: active.edges,
-        // Use the cached structure immediately; refreshSchema() below then
-        // reconciles it with the database as it is right now.
-        dbSchema: file.dbSchema ?? [],
-        schema: flattenSchema(file.dbSchema ?? []),
-        snippets: file.snippets ?? [],
-        focusedBlockId: null,
-      });
-      markSaved(get, set);
-      touchRecent(get, set, { name, projectPath, dbType, dbPath });
-      void get().refreshSchema();
+      applyProjectFile(get, set, projectPath, contents);
+      lastDiskStamp = null;
     } catch (err) {
       console.error("Failed to open project:", err);
       // Prune a project file that no longer exists / can't be read.
       get().removeRecent(projectPath);
-      alert(`Could not open project:\n${projectPath}\n\n${String(err)}`);
+      void showError("Could not open the project", `${projectPath}\n\n${String(err)}`);
     }
   },
 
@@ -719,16 +933,24 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   refreshSchema: async () => {
-    const { dbPath } = get();
-    if (!dbPath) {
-      set({ schema: {}, dbSchema: [] });
+    const { connection } = get();
+    if (!connection) {
+      set({ schema: {}, dbSchema: [], schemaObjects: EMPTY_SCHEMA_OBJECTS, schemaError: null });
       return;
     }
     try {
-      const dbSchema = await invoke<DbSchema>("introspect_schema", { dbPath });
-      set({ dbSchema, schema: flattenSchema(dbSchema) });
+      const snapshot = await invoke<SchemaSnapshot>("introspect_schema", { connection });
+      // The connection may have changed while introspecting: drop stale data.
+      if (get().connection !== connection) return;
+      set({
+        dbSchema: snapshot.tables,
+        schema: flattenSchema(snapshot.tables),
+        schemaObjects: { triggers: snapshot.triggers, routines: snapshot.routines },
+        schemaError: null,
+      });
     } catch (err) {
-      console.error("introspect_schema:", err);
+      // Keep the cached structure: it still helps while the server is down.
+      if (get().connection === connection) set({ schemaError: errorMessage(err) });
     }
   },
 
@@ -743,14 +965,46 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     set({ nodes: [...nodes, node] });
   },
 
-  addSelectBlock: (table) => {
+  addSelectBlock: (table, schema) => {
     const id = spawnSqlBlock(get, set, {
-      title: `Select ${table}`,
+      title: `Select ${schema ? `${schema}.` : ""}${table}`,
       blockType: "query",
-      sql: `SELECT * FROM ${quoteIdent(table)} LIMIT 100;`,
+      sql: `SELECT * FROM ${qualifiedName(table, schema)} LIMIT 100;`,
     });
     // Auto-run so double-clicking a table immediately shows its rows.
     void get().runBlock(id);
+  },
+
+  addTableNode: (table, schema) => {
+    const nodes = get().nodes;
+    const key = schema ? `${schema}.${table}` : table;
+    if (nodes.some((n) => isTableNode(n) && tableKeyOf(n) === key)) return;
+    const node = newTableNode(table, schema, staggeredPosition(nodes.length));
+    set({ nodes: [...nodes, node] });
+  },
+
+  addReferencedTables: () => {
+    const { nodes, dbSchema } = get();
+    const onCanvas = new Set(nodes.filter(isTableNode).map(tableKeyOf));
+    const missing = referencedKeysOnPage(nodes, dbSchema)
+      .map((key) => dbSchema.find((t) => tableKey(t) === key))
+      .filter((t): t is TableInfo => t !== undefined && !onCanvas.has(tableKey(t)));
+    if (missing.length === 0) return 0;
+
+    const blocks = nodes.filter((n) => !isGroupNode(n) && !isTableNode(n) && !n.parentId);
+    const left = blocks.length ? Math.min(...blocks.map((n) => n.position.x)) : 0;
+    const top = blocks.length ? Math.min(...blocks.map((n) => n.position.y)) : 0;
+    let y = top;
+    const added = missing.map((table) => {
+      const node = newTableNode(table.name, table.schema, {
+        x: left - TABLE_NODE_WIDTH - TABLE_COLUMN_GAP,
+        y,
+      });
+      y += TABLE_NODE_HEADER_HEIGHT + table.columns.length * TABLE_NODE_ROW_HEIGHT + TABLE_NODE_SPACING;
+      return node;
+    });
+    set({ nodes: [...nodes, ...added] });
+    return added.length;
   },
 
   addGroup: () => {
@@ -832,7 +1086,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     try {
       await invoke("write_text_file", { path, contents: script.sql });
     } catch (err) {
-      alert(`Could not write the file:\n${String(err)}`);
+      void showError("Could not write the file", String(err));
     }
   },
 
@@ -844,7 +1098,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     try {
       contents = await invoke<string>("read_text_file", { path });
     } catch (err) {
-      alert(`Could not read the file:\n${String(err)}`);
+      void showError("Could not read the file", String(err));
       return;
     }
 
@@ -854,12 +1108,12 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       try {
         parsed = JSON.parse(contents);
       } catch (err) {
-        alert(`Invalid JSON:\n${String(err)}`);
+        void showError("Invalid JSON", String(err));
         return;
       }
       const { sql, warnings } = jsonToInserts(parsed, get().dbSchema);
       if (!sql.trim()) {
-        alert(`Nothing to import:\n${warnings.join("\n")}`);
+        void showMessage({ title: "Nothing to import", message: warnings.join("\n"), tone: "info" });
         return;
       }
       spawnScriptBlock(get, set, name, warningsHeader(warnings) + sql);
@@ -939,8 +1193,29 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     });
   },
 
+  // Editing invalidates the underlined error range: it pointed into the old text.
   updateSql: (id, sql) =>
-    set({ nodes: patchNode(get().nodes, id, { sql }) }),
+    set({ nodes: patchNode(get().nodes, id, { sql, editorError: null }) }),
+
+  formatBlock: (id) => {
+    const node = get().nodes.find((n) => n.id === id);
+    if (!node || !isSqlNode(node)) return;
+    let formatted: string;
+    try {
+      formatted = formatSql(node.data.sql, get().connection?.engine ?? "sqlite");
+    } catch (err) {
+      void showError("Could not format the SQL", String(err));
+      return;
+    }
+    if (formatted === node.data.sql) return;
+    // Through the editor when mounted, so the change lands in its undo history.
+    if (!replaceEditorContent(id, formatted)) get().updateSql(id, formatted);
+  },
+
+  formatFocusedBlock: () => {
+    const focused = get().focusedBlockId;
+    if (focused) get().formatBlock(focused);
+  },
 
   updateTitle: (id, title) =>
     set({ nodes: patchNode(get().nodes, id, { title }) }),
@@ -1028,11 +1303,14 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   setFocusedBlock: (id) => set({ focusedBlockId: id }),
 
   runBlock: async (id) => {
-    const { dbPath, nodes } = get();
+    const { connection, nodes } = get();
     const node = nodes.find((n) => n.id === id);
     if (!node || !isSqlNode(node)) return;
+    // Already running: a second trigger (menu accelerator + editor keymap
+    // firing together, double click) must not execute the SQL twice.
+    if (node.data.status === "running") return;
 
-    if (!dbPath) {
+    if (!connection) {
       set({
         nodes: patchNode(nodes, id, {
           status: "error",
@@ -1046,16 +1324,18 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     // embedded in the source block's footer.
     const routed = node.data.emitToBlock === true;
 
-    set({ nodes: patchNode(get().nodes, id, { status: "running", error: null }) });
+    set({
+      nodes: patchNode(get().nodes, id, { status: "running", error: null, editorError: null }),
+    });
     // Ensure the linked block exists (spawn it before execution so its
     // "running" state is visible immediately).
     if (routed) ensureLinkedResult(get, set, node);
 
+    // Expand `{{favorite}}` references into inline subqueries before running.
+    const sql = expandSnippets(node.data.sql, get().snippets);
     try {
-      // Expand `{{favorite}}` references into inline subqueries before running.
-      const sql = expandSnippets(node.data.sql, get().snippets);
       const result = await invoke<QueryResult>("execute_sql", {
-        dbPath,
+        connection,
         sql,
         maxRows: MAX_FETCH_ROWS,
       });
@@ -1063,11 +1343,11 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       // DDL may have changed the schema — refresh autocompletion data.
       if (/\b(create|alter|drop)\b/i.test(node.data.sql)) void get().refreshSchema();
     } catch (err) {
-      writeRunResult(get, set, id, {
-        status: "error",
-        result: null,
-        error: String(err),
-      });
+      const message = errorMessage(err);
+      writeRunResult(get, set, id, { status: "error", result: null, error: message });
+      const range = locateError(node.data.sql, { message, position: errorPosition(err) }, sql);
+      const editorError = range ? { ...range, message } : null;
+      set({ nodes: patchNode(get().nodes, id, { editorError }) });
     }
   },
 
@@ -1078,25 +1358,59 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     }
   },
 
+  checkProjectFile: async () => {
+    const { projectPath, view } = get();
+    if (!projectPath || view !== "canvas" || isAskingAboutDisk) return;
+    let stamp: number;
+    try {
+      stamp = await invoke<number>("project_file_stamp", { path: projectPath });
+    } catch {
+      return; // Missing or unreadable for now: the next save reports it.
+    }
+    if (stamp === lastDiskStamp) return;
+    lastDiskStamp = stamp;
+    const contents = await invoke<string>("load_notebook", { path: projectPath });
+    if (contents === diskContents || get().projectPath !== projectPath) return;
+    // Blocks created or edited by Claude merge in live; ask only otherwise.
+    if (mergeExternalChange(get, set, contents)) return;
+
+    isAskingAboutDisk = true;
+    try {
+      const hasLocalEdits = hasUnsavedChanges(get());
+      const shouldReload = await askConfirm({
+        title: "Project changed on disk",
+        message:
+          `"${get().projectName ?? "This project"}" was modified by another program ` +
+          `(for example Claude through the Graft MCP server).` +
+          (hasLocalEdits ? "\n\nReloading discards your unsaved changes." : ""),
+        okLabel: "Reload",
+        isDanger: hasLocalEdits,
+      });
+      if (shouldReload) applyProjectFile(get, set, projectPath, contents);
+    } finally {
+      isAskingAboutDisk = false;
+    }
+  },
+
+  notifyProjectChanged: (path) => {
+    if (path !== get().projectPath) return;
+    lastDiskStamp = null;
+    void get().checkProjectFile();
+  },
+
   saveNotebook: async () => {
     const { projectPath } = get();
     if (!projectPath) return; // projects always have a path once created
+    if (!(await confirmOverwrite(projectPath))) return;
+    const contents = JSON.stringify(serializeNotebook(get()), null, 2);
     try {
-      await invoke("save_notebook", {
-        path: projectPath,
-        contents: JSON.stringify(serializeNotebook(get()), null, 2),
-      });
+      await invoke("save_notebook", { path: projectPath, contents });
     } catch (err) {
-      alert(`Could not save the project:\n${projectPath}\n\n${String(err)}`);
+      void showError("Could not save the project", `${projectPath}\n\n${String(err)}`);
       return;
     }
-    markSaved(get, set);
-    touchRecent(get, set, {
-      name: get().projectName ?? "untitled",
-      projectPath,
-      dbType: get().dbType,
-      dbPath: get().dbPath,
-    });
+    markSaved(get, set, contents);
+    touchRecent(get, set, recentEntry(get().projectName ?? "untitled", projectPath, get().connection));
   },
 }));
 
@@ -1191,6 +1505,24 @@ function writeRunResult(
   set({ nodes });
 }
 
+/** Store a connection password in the OS keychain (via the backend). */
+function storePassword(connectionId: string, password: string): Promise<void> {
+  return invoke("set_connection_password", { connectionId, password });
+}
+
+function recentEntry(
+  name: string,
+  projectPath: string,
+  connection: ConnectionConfig | null,
+): Omit<RecentProject, "modifiedAt"> {
+  return {
+    name,
+    projectPath,
+    dbType: connection?.engine ?? "sqlite",
+    dbPath: connection?.engine === "sqlite" ? (connection.path ?? null) : null,
+  };
+}
+
 /** Insert/update a recent-project entry, move it to the top, and persist. */
 function touchRecent(
   get: () => GraftState,
@@ -1206,6 +1538,11 @@ function touchRecent(
   );
   persistRecents(next);
   set({ recentProjects: next });
+  // The MCP server can only reach projects registered on disk (recents live
+  // in the webview's localStorage, out of its reach).
+  invoke("register_project", { path: entry.projectPath, name: entry.name }).catch((err) =>
+    console.error("register_project:", err),
+  );
 }
 
 // Keep `dirty` (UI indicator) and the backend's close/quit guard in sync with
@@ -1228,6 +1565,12 @@ useGraftStore.subscribe((state, prev) => {
     const dirty = hasUnsavedChanges(current);
     if (dirty !== current.dirty) useGraftStore.setState({ dirty });
   }, DIRTY_CHECK_DELAY_MS);
+});
+
+// Generated SQL (row actions, INSERTs…) quotes identifiers for the engine of
+// the open connection.
+useGraftStore.subscribe((state, prev) => {
+  if (state.connection !== prev.connection) setSqlDialect(state.connection?.engine ?? "sqlite");
 });
 
 useGraftStore.subscribe((state, prev) => {

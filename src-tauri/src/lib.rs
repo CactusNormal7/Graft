@@ -1,6 +1,12 @@
-mod db;
+mod bridge_server;
+mod claude_desktop;
+mod connection_commands;
+mod db_commands;
 mod dialogs;
+mod lsp;
+mod menu;
 mod notebook;
+mod registry_commands;
 mod scope;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,10 +54,19 @@ fn confirm_discard<R: Runtime>(app: &AppHandle<R>, proceed: impl FnOnce() + Send
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    graft_core::secrets::prepare();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(FileScope::default())
         .manage(UnsavedChanges::default())
+        .manage(lsp::LanguageServer::default())
+        .manage(graft_core::db::Databases::default())
+        .menu(menu::build)
+        .setup(|app| {
+            bridge_server::start(app.handle());
+            Ok(())
+        })
+        .on_menu_event(|app, event| menu::forward_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if has_unsaved_changes(window.app_handle()) {
@@ -64,10 +79,14 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            db::execute_sql,
-            db::introspect_schema,
+            db_commands::execute_sql,
+            db_commands::introspect_schema,
+            db_commands::test_connection,
+            db_commands::set_connection_password,
+            db_commands::has_connection_password,
             notebook::save_notebook,
             notebook::load_notebook,
+            notebook::project_file_stamp,
             notebook::write_text_file,
             notebook::read_text_file,
             notebook::default_project_dir,
@@ -79,11 +98,25 @@ pub fn run() {
             dialogs::pick_export_file,
             dialogs::confirm_dialog,
             set_unsaved_changes,
+            menu::set_menu_states,
+            registry_commands::register_project,
+            claude_desktop::install_claude_desktop,
+            connection_commands::list_saved_connections,
+            connection_commands::save_connection,
+            connection_commands::delete_saved_connection,
+            registry_commands::get_mcp_writes,
+            registry_commands::set_mcp_writes,
+            lsp::lsp_start,
+            lsp::lsp_send,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     app.run(|app, event| {
+        if let RunEvent::Exit = event {
+            bridge_server::stop(app);
+            return;
+        }
         // App-level quit (e.g. Cmd+Q on macOS) bypasses the window close event.
         // `code: None` means a user/OS-initiated exit, not `app.exit(code)`.
         if let RunEvent::ExitRequested { api, code: None, .. } = event {

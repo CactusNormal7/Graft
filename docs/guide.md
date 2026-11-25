@@ -16,6 +16,20 @@
 pnpm install
 ```
 
+### Optionnel : serveur de langage SQL
+
+```bash
+pnpm lsp:install
+```
+
+Installe [`sql-language-server`](https://github.com/joe-re/sql-language-server)
+dans ton dossier de données utilisateur. Graft le détecte au lancement et
+l'utilise pour enrichir l'autocomplétion et signaler quelques problèmes
+(soulignés en pointillé, niveau « info »). Sans lui, tout fonctionne avec
+l'autocomplétion intégrée. Note : ce serveur écrit un journal
+(`sql-language-server.log` dans le dossier temporaire) contenant le SQL des
+blocs ; Graft ne lui transmet jamais de connexion ni de mot de passe.
+
 ## 3. Lancer l'application
 
 ```bash
@@ -42,10 +56,19 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 - **+ New project** → ouvre une **modale** :
   - **Nom** du projet,
   - **Emplacement** (par défaut `~/Documents/Graft`, modifiable + *Browse*),
-  - **Type de base** (SQLite ; PostgreSQL/MySQL arrivent en v0.3).
-  - **Database file (SQLite)** : *Browse* pour pointer un fichier `.db`/`.sqlite`
-    **existant** (ex. `data/sample.db`), ou laisse vide pour créer un nouveau
-    `<nom>.db` à côté du projet.
+  - **Moteur** : **SQLite**, **PostgreSQL** ou **MySQL** (MariaDB compris).
+    - SQLite : **Database file** → *Browse* pour pointer un fichier
+      `.db`/`.sqlite` **existant**, ou laisse vide pour créer un nouveau
+      `<nom>.db` à côté du projet.
+    - PostgreSQL / MySQL : **hôte**, **port** (5432 / 3306 par défaut),
+      **base** (obligatoire pour MySQL ; pour Postgres, par défaut celle du
+      nom d'utilisateur), **utilisateur**, **mot de passe** et **SSL**
+      (*Disable*, *Prefer* — défaut, *Require*, *Verify* = vérification du
+      certificat et du nom d'hôte). Le mot de passe est rangé dans le
+      **trousseau du système** (Trousseau macOS, Gestionnaire d'identification
+      Windows), **jamais** dans le fichier `.graft`.
+  - **Test connection** vérifie la connexion et affiche la version du serveur
+    (ou l'erreur) sans rien enregistrer.
   À la validation, le projet est **créé et sauvegardé immédiatement**
   (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas. Si un projet du
   même nom existe déjà à cet emplacement, la création est **refusée** (il n'est
@@ -56,11 +79,24 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
   de la liste.
 - **Open file…** → ouvre un `.graft` existant où qu'il soit.
 
-> Seul **SQLite** est fonctionnel en v0.1 (multi-moteur en v0.3).
+> **Connexions nommées** : remplis « Save as named connection » (création de
+> projet ou fenêtre Connection) pour enregistrer la connexion sous un nom.
+> Elle apparaît alors dans la liste **Connections** de l'accueil (clic = nouveau
+> projet sur cette base, ✕ = la retirer) et dans le menu « Saved connection »
+> des formulaires. Les projets qui utilisent la même connexion partagent son
+> mot de passe enregistré.
+>
+> **Changer de connexion** : dans un projet ouvert, clique sur le bouton de
+> connexion de la toolbar (à droite du nom du projet). Il passe au **rouge**
+> si la base est injoignable (le message s'affiche dans la sidebar). Laisse le
+> mot de passe vide pour garder celui déjà enregistré. Sur Postgres/MySQL,
+> Graft garde **une** connexion ouverte par projet : un `SET`, une table
+> temporaire ou une transaction ouverte dans un bloc reste visible des
+> suivants, comme dans une console.
 
-> 💡 Base d'exemple fournie : **`data/sample.db`** (tables `users`, `orders`,
-> `products` avec des données). Tu peux créer un projet pointant dessus, ou pointer
-> un nouveau projet vers ce fichier.
+> 💡 Le dossier `data/` est ignoré par Git (certains jeux de données dépassent
+> la limite de GitHub) : aucune base d'exemple n'est versionnée. Pointe un
+> projet vers ta propre base `.db`/`.sqlite`, ou laisse Graft en créer une vide.
 
 ### Le canvas
 1. **+ Block** (toolbar) → choisis un type (`query`, `migration`, `procedure`,
@@ -76,8 +112,16 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      et temps en ms), avec **numéros de ligne** et **double-clic sur une
      cellule pour la copier**.
    - Une écriture/DDL affiche le **nombre de lignes affectées**.
-   - Une erreur s'affiche en rouge dans le bloc.
+   - Une erreur s'affiche en rouge dans le bloc, et l'endroit fautif est
+     **souligné dans l'éditeur** (survole-le pour relire le message). La
+     position vient du moteur quand il la donne, sinon du mot cité dans le
+     message ; à défaut, la première ligne est soulignée. Le soulignement
+     disparaît dès que tu modifies le SQL.
 3. **Actions par bloc** dans le header :
+   - **Formater le SQL** : **Shift+Alt+F** (⇧⌥F sur Mac) dans l'éditeur, ou
+     clic droit → **Format SQL**, ou la palette ⌘K. Mise en forme selon le
+     dialecte du moteur, mots-clés en majuscules ; les `{{favoris}}` sont
+     préservés ; annulable par Ctrl/Cmd+Z. Un SQL invalide est laissé tel quel.
    - **Double-clic sur le titre** → renommer (Entrée pour valider, Échap pour
      annuler).
    - **☰ / {} / 📊** cycle la vue du résultat entre **table**, **json** et
@@ -107,7 +151,8 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
    - **⧉** duplique le bloc à côté.
    - **✕** supprime le bloc (et son bloc résultat lié, le cas échéant).
    - **Clic droit sur le bloc** ouvre un menu contextuel (Run, Duplicate,
-     Rename, Copy SQL, changement de vue, toggle bloc-lié, Delete).
+     Rename, Collapse, Save as favorite…, Copy SQL, changement de vue, toggle
+     bloc-lié, génération d'INSERT, Delete).
    - **Clic droit sur une cellule ou une ligne** de résultat : copies
      (valeur, colonne, ligne en JSON/INSERT/TSV) et snippets SQL (clause
      `WHERE`, `SELECT` filtré, template `UPDATE`), plus des actions qui
@@ -128,41 +173,58 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      nom de table au lieu du placeholder `«table»`.
    - **Redimensionnement** : sélectionne un bloc, les poignées apparaissent
      sur les bords/coins ; taille persistée dans le fichier `.graft`.
-4. **Sidebar — explorateur de schéma** : les tables de la base connectée
-   apparaissent en direct ; clique **▸** pour dérouler les colonnes ; tape
-   dans **Search…** pour filtrer (tables + colonnes) — les tables dont une
+4. **Sidebar — explorateur de schéma** : sections **Tables**, **Views**,
+   **Triggers** et **Procedures & functions** de la base connectée (SQLite,
+   PostgreSQL ou MySQL). Clique **▸** pour dérouler une table : colonnes avec
+   leur type et les badges **PK** (clé primaire), **FK** (clé étrangère),
+   **NN** (non nul), puis ses **index** et **clés étrangères**. Tape dans
+   **Search…** pour filtrer (noms, colonnes, routines) — les tables dont une
    colonne matche se déploient automatiquement. **↻** relance l'introspection.
+   **Clic droit** sur une table/vue : SELECT, insertion du nom, **définition**
+   d'une vue dans un nouveau bloc. **Double-clic** sur un trigger ou une
+   procédure/fonction : sa **définition** s'ouvre dans un nouveau bloc.
    **Double-clic sur un nom de table** crée automatiquement un bloc
    `SELECT * FROM <table> LIMIT 100;` sur le canvas et l'exécute aussitôt.
    **Double-clic sur une colonne** insère `table.colonne` au curseur du bloc
    actif (le dernier éditeur focalisé — surligné dans la liste « Blocks »).
-5. **+ Group** (toolbar) crée un **conteneur coloré**. Fais glisser des blocs
+5. **Tables sur le canvas** : clic droit sur une table dans la sidebar →
+   **Add to canvas**, ou palette ⌘K / menu **View** → **Add referenced
+   tables to canvas** (ajoute à gauche des blocs toutes les tables que leur
+   SQL utilise). Chaque bloc est alors **relié en pointillé** aux tables qu'il
+   lit ou écrit (`FROM`, `JOIN`, `INSERT INTO`, `UPDATE`, `CREATE TABLE`,
+   `REFERENCES`, `ON` d'un index/trigger). Ces liens suivent le SQL tout seuls
+   et ne se suppriment pas à la main ; ils sont purement visuels. **✕** sur
+   une table la retire du canvas (la table elle-même n'est pas touchée) ;
+   double-clic sur son en-tête ouvre un bloc `SELECT`.
+6. **+ Group** (toolbar) crée un **conteneur coloré**. Fais glisser des blocs
    à l'intérieur pour les y attacher : déplacer le groupe déplace alors tous ses
    blocs. Sors un bloc du cadre pour le détacher. Le header du groupe permet de
    **renommer** (double-clic), **changer la couleur** (pastille) et **supprimer**
    le groupe (✕ — les blocs contenus sont conservés, seulement détachés).
    *(Suppression au clavier désactivée : utilise les boutons ✕ des blocs/groupes
    pour que les cascades — bloc résultat lié, détachement — s'exécutent.)*
-6. **▶ Run all** (toolbar) exécute tous les blocs dans l'ordre.
-7. **Déplace** les blocs librement, **relie-les** en tirant depuis le point de
+7. **▶ Run all** (toolbar) exécute tous les blocs dans l'ordre.
+8. **Déplace** les blocs librement, **relie-les** en tirant depuis le point de
    connexion droit vers le point gauche d'un autre bloc.
-8. **Pages (onglets type Excel)** : la barre en bas du canvas liste les pages,
+9. **Pages (onglets type Excel)** : la barre en bas du canvas liste les pages,
    chacune avec son propre canvas de blocs/groupes. **Clic** pour changer de
    page, **double-clic** pour renommer, **clic droit** pour supprimer, **+**
    pour en ajouter. Toutes les pages sont enregistrées dans le même `.graft`.
-9. **Save** (ou **⌘S / Ctrl+S**) → enregistre le projet (toutes les pages)
+10. **Save** (ou **⌘S / Ctrl+S**) → enregistre le projet (toutes les pages)
    dans son fichier `.graft` (JSON). Un **point orange** après le nom du projet
    (et « Save ● ») signale des **modifications non sauvegardées** — SQL,
    position/taille des blocs, pages, favoris… ; exécuter une requête n'en est
    pas une. Ouvrir ou créer un autre projet, fermer la fenêtre ou quitter
    l'app demande alors confirmation. Le clic sur **graft** (en haut à gauche)
    revient à l'accueil sans fermer le projet : **↩ Back to <projet>** y ramène.
-10. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
+11. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
    en bas à droite.
 
 ### Blocs favoris & sous-requêtes (`{{nom}}`)
 - **Enregistrer un favori** : clic droit sur un bloc → **« Save as favorite… »**,
-  puis choisis un nom. Les favoris sont listés dans la sidebar et enregistrés
+  puis choisis un nom dans la fenêtre qui s'ouvre (Entrée pour valider, Échap
+  pour annuler). Clic droit sur un favori de la sidebar → confirmation, puis
+  suppression. Les favoris sont listés dans la sidebar et enregistrés
   dans le `.graft`. Le nom est normalisé pour être référençable : seuls lettres,
   chiffres, `_`, `.` et `-` sont gardés, le reste devient `_` (« Query 1 » →
   `Query_1`).
@@ -177,9 +239,11 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 - **Insérer une référence** : double-clic sur le favori dans la sidebar (insère
   `{{nom}}` dans le bloc focalisé), ou double-clic sans bloc focalisé pour
   ouvrir le favori comme nouveau bloc.
-- **⌘K / Ctrl+K** ouvre la **barre d'actions** : recherche parmi les favoris,
-  ↑/↓ pour naviguer, ↵ pour insérer la référence dans le bloc focalisé (ou créer
-  un bloc si aucun n'est focalisé).
+- **⌘K / Ctrl+K** ouvre la **barre d'actions** : tape pour filtrer les
+  **commandes** (Format SQL, Run, New … block, Save, Zoom…, avec leur
+  raccourci) et les **favoris** ; ↑/↓ pour naviguer, ↵ pour lancer la commande
+  ou insérer la référence du favori dans le bloc focalisé (ou créer un bloc si
+  aucun n'est focalisé).
 
 ### Données imbriquées ↔ INSERT multi-tables (ORM)
 Une requête avec jointures donne une vue imbriquée (`{}`) — et cette vue est une
@@ -203,6 +267,26 @@ Les tables sont devinées à partir du **schéma en cache** (colonnes + clés
 mapping choisi, les colonnes ignorées et les FK manquantes — vérifie-les avant
 d'exécuter.
 
+### Barre de menus
+Graft a une vraie barre de menus (barre système sur macOS, menu de fenêtre
+sur Windows). Raccourcis : **Cmd** sur macOS, **Ctrl** sur Windows.
+
+| Action | macOS | Windows |
+|--------|-------|---------|
+| Nouveau projet | ⌘N | Ctrl+N |
+| Ouvrir un projet | ⌘O | Ctrl+O |
+| Enregistrer | ⌘S | Ctrl+S |
+| Exécuter le bloc | ⌘↵ | Ctrl+Enter |
+| Exécuter tous les blocs | ⌘⇧↵ | Ctrl+Shift+Enter |
+| Formater le SQL | ⇧⌥F | Shift+Alt+F |
+| Palette de commandes | ⌘K | Ctrl+K |
+| Zoom + / − / ajuster | ⌘= / ⌘- / ⌘0 | Ctrl+= / Ctrl+- / Ctrl+0 |
+| Accueil | ⌘⇧H | Ctrl+Shift+H |
+
+**File ▸ New Block** crée un bloc de chaque type ; **New Group**, **New Page**,
+**Import Data File…** et **View ▸ Refresh Schema** reprennent les boutons de
+la toolbar. Sur l'écran d'accueil, les actions du canvas apparaissent grisées.
+
 ### Navigation sur le canvas
 - **Déplacer la vue** : glisser le fond, ou **deux doigts au trackpad** (scroll).
 - **Zoom** : **pincement** (trackpad), ou les contrôles en bas à gauche.
@@ -214,20 +298,55 @@ d'exécuter.
   le curseur change (pas de poignées visibles).
 - **Minimap** : en bas à droite (cliquable/zoomable).
 
-## 5. Construire un binaire distribuable
+## 5. Utiliser Graft avec Claude (MCP)
+
+Graft fournit un **serveur MCP** (`graft-mcp`) : Claude Desktop ou Claude Code
+peut alors lister tes projets, lire le schéma, lire/créer/modifier des blocs,
+exécuter des requêtes **en lecture seule**, expliquer un plan d'exécution ou
+générer des INSERT — **sans que l'app soit ouverte**.
+
+**Le plus simple** : dans Graft, menu **File ▸ Install in Claude Desktop…**
+(ou la palette ⌘K), puis redémarre Claude Desktop. Graft ajoute son serveur à
+la configuration de Claude Desktop en gardant tes autres réglages (l'ancien
+fichier est sauvegardé en `.bak`). Le serveur est livré avec l'app.
+
+**À la main** (ou en développement) :
+1. Construis le serveur : `cd src-tauri && cargo build --release -p graft-mcp`.
+2. Déclare-le dans `claude_desktop_config.json` (macOS :
+   `~/Library/Application Support/Claude/`, Windows : `%APPDATA%\Claude\`) :
+   ```json
+   { "mcpServers": { "graft": { "command": "/chemin/vers/src-tauri/target/release/graft-mcp" } } }
+   ```
+3. Redémarre Claude Desktop.
+
+Claude ne voit que les projets que tu as **ouverts au moins une fois dans
+Graft**. Il ne peut **pas modifier la base** tant que tu n'as pas coché
+**« Allow Claude (MCP) to modify this database »** dans la fenêtre
+**Connection** (bouton de connexion de la toolbar) ; ce réglage reste sur ton
+ordinateur, il n'est pas enregistré dans le fichier `.graft`. Les blocs que
+Claude crée ou modifie sont écrits dans le `.graft`. Si le projet est ouvert
+dans Graft, ils **apparaissent aussitôt sur le canvas**, sans rien perdre de
+tes modifications en cours. Seul cas où Graft te pose la question (**« Project
+changed on disk »**, proposition de recharger) : quand Claude et toi avez
+modifié le même bloc différemment, ou qu'autre chose que les blocs a changé.
+Si tu refuses puis enregistres, Graft te demande confirmation avant
+d'**écraser** les changements faits par Claude.
+
+## 6. Construire un binaire distribuable
 
 ```bash
-pnpm tauri build
+pnpm tauri:build
 ```
+
+(compile aussi le serveur MCP `graft-mcp` et l'embarque dans l'app ; `pnpm tauri
+build` seul produit l'app sans lui.)
 
 Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 `.app`/`.dmg` sur macOS).
 
-## 6. Limites actuelles (v0.1)
+## 7. Limites actuelles (v0.1)
 
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
-  schéma + gutter + brackets + `Mod-Enter`) — reste à faire côté v0.2+ : LSP
-  (`sql-language-server`), diagnostics en ligne, formatage, palette ⌘K.
-- Seul **SQLite** est supporté (Postgres/MySQL en v0.3).
-- Les liens entre blocs sont visuels uniquement (pas encore d'ordre
-  d'exécution).
+  schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées + LSP
+  optionnel + formatage).
+- Les liens entre blocs sont visuels uniquement (pas d'ordre d'exécution).

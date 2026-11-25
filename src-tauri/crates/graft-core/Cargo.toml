@@ -1,0 +1,31 @@
+[package]
+name = "graft-core"
+version = "0.1.0"
+description = "Graft engine shared by the desktop app and the MCP server: database access, .graft project files, secrets"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+# preserve_order: rewriting a .graft keeps the app's key order, so Git diffs
+# stay minimal and the app can merge the change live (externalMerge.ts).
+serde_json = { version = "1", features = ["preserve_order"] }
+dirs = "5"
+futures-util = { version = "0.3", default-features = false }
+# rustls (not native-tls) so Windows/macOS builds need no OpenSSL; native
+# roots so corporate CAs installed in the OS trust store are honoured.
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "tls-rustls-ring-native-roots",
+  "sqlite",
+  "postgres",
+  "mysql",
+] }
+# Same version as sqlx-sqlite's (Cargo unifies them): only used to read
+# `sqlite3_error_offset`, which sqlx does not expose, to underline errors.
+libsqlite3-sys = "0.30"
+# OS credential store (macOS Keychain, Windows Credential Manager) for
+# connection passwords, which never go into the .graft file.
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+tokio = { version = "1", features = ["full"] }
+# OS random source for the live-bridge token (already in the dependency tree).
+getrandom = "0.2"

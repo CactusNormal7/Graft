@@ -6,10 +6,14 @@ import { ResultTable } from "./ResultTable";
 import { BlockContextMenu, type MenuAction } from "./BlockContextMenu";
 import { useInnerScroll } from "./useInnerScroll";
 import { ResultFooter, STATUS_LABEL, VIEW_ICON, nextResultView } from "./blockChrome";
+import { SHORTCUTS } from "../commands";
+import { askText } from "../dialogs/appDialogs";
+import { shortcutLabel } from "../shortcuts";
 import { normalizeResultView, type ChartConfig, type ResultView } from "../types";
 
 export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
   const updateSql = useGraftStore((s) => s.updateSql);
+  const formatBlock = useGraftStore((s) => s.formatBlock);
   const updateTitle = useGraftStore((s) => s.updateTitle);
   const runBlock = useGraftStore((s) => s.runBlock);
   const duplicateBlock = useGraftStore((s) => s.duplicateBlock);
@@ -25,6 +29,7 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
   const copyInsertsAction = useGraftStore((s) => s.copyInserts);
   const exportInsertsAction = useGraftStore((s) => s.exportInserts);
   const schema = useGraftStore((s) => s.schema);
+  const engine = useGraftStore((s) => s.connection?.engine ?? "sqlite");
 
   // INSERT generation needs rows — either embedded or routed to a linked block.
   const hasResultRows =
@@ -75,7 +80,12 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
   };
 
   const menuActions: MenuAction[] = [
-    { label: "Run", shortcut: "Ctrl+↵", onClick: () => runBlock(id) },
+    { label: "Run", shortcut: shortcutLabel(SHORTCUTS.runBlock), onClick: () => runBlock(id) },
+    {
+      label: "Format SQL",
+      shortcut: shortcutLabel(SHORTCUTS.formatSql),
+      onClick: () => formatBlock(id),
+    },
     { label: "Duplicate", onClick: () => duplicateBlock(id) },
     { label: "Rename", onClick: () => setEditingTitle(true) },
     {
@@ -84,11 +94,13 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
     },
     {
       label: "Save as favorite…",
-      onClick: () => {
-        const name = window.prompt(
-          "Favorite name (used as {{name}} in other queries):",
-          data.title,
-        );
+      onClick: async () => {
+        const name = await askText({
+          title: "Save as favorite",
+          message: "Name used as {{name}} in other queries:",
+          okLabel: "Save",
+          defaultValue: data.title,
+        });
         if (name) saveBlockAsSnippet(id, name);
       },
     },
@@ -256,9 +268,12 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
             blockId={id}
             value={data.sql}
             schema={schema}
+            engine={engine}
             onChange={(v) => updateSql(id, v)}
             onRun={() => runBlock(id)}
+            onFormat={() => formatBlock(id)}
             onFocus={() => setFocusedBlock(id)}
+            error={data.editorError ?? null}
           />
         </div>
       )}

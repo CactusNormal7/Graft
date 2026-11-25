@@ -1,7 +1,8 @@
-import { useState } from "react";
 import { useGraftStore } from "../store/useGraftStore";
 import { NewProjectModal } from "../components/NewProjectModal";
-import type { RecentProject } from "../types";
+import { askConfirm } from "../dialogs/appDialogs";
+import { ENGINE_LABEL, connectionLabel } from "../connection";
+import type { RecentProject, SavedConnection } from "../types";
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -27,7 +28,20 @@ export function HomeScreen() {
   const dirty = useGraftStore((s) => s.dirty);
   const resumeProject = useGraftStore((s) => s.resumeProject);
 
-  const [showNew, setShowNew] = useState(false);
+  const isNewProjectModalOpen = useGraftStore((s) => s.isNewProjectModalOpen);
+  const setNewProjectModalOpen = useGraftStore((s) => s.setNewProjectModalOpen);
+  const savedConnections = useGraftStore((s) => s.savedConnections);
+  const deleteSavedConnection = useGraftStore((s) => s.deleteSavedConnection);
+
+  const removeSavedConnection = async (saved: SavedConnection) => {
+    const isConfirmed = await askConfirm({
+      title: "Remove saved connection",
+      message: `Remove “${saved.name}” from the saved connections? Projects using it keep working, and its password stays in the keychain.`,
+      okLabel: "Remove",
+      isDanger: true,
+    });
+    if (isConfirmed) await deleteSavedConnection(saved.connection.id);
+  };
 
   return (
     <div className="app-shell">
@@ -35,7 +49,7 @@ export function HomeScreen() {
         {/* Sidebar */}
         <aside className="sidebar">
           <div className="toolbar__brand" style={{ marginBottom: "4px" }}>graft</div>
-          <button className="btn-accent" style={{ textAlign: "center" }} onClick={() => setShowNew(true)}>
+          <button className="btn-accent" style={{ textAlign: "center" }} onClick={() => setNewProjectModalOpen(true)}>
             + New project
           </button>
           <button className="btn" style={{ textAlign: "center" }} onClick={openProjectFromDialog}>
@@ -50,6 +64,34 @@ export function HomeScreen() {
               <div key={p.projectPath} className="text-xs" style={{ cursor: "pointer", padding: "2px 0" }}
                 onClick={() => openProjectByPath(p.projectPath)} title={p.projectPath}>
                 {p.name}.graft
+              </div>
+            ))}
+          </div>
+          <div className="sep sep--h" />
+          <div className="label">Connections</div>
+          <div className="sidebar__blocks">
+            {savedConnections.length === 0 && (
+              <span className="text-muted">Name a connection in a project to reuse it here.</span>
+            )}
+            {savedConnections.map((saved) => (
+              <div
+                key={saved.connection.id}
+                className="sidebar__block"
+                title={`${connectionLabel(saved.connection)} — click for a new project on it`}
+                onClick={() => setNewProjectModalOpen(true, saved.connection)}
+              >
+                <span className="schema-flag">{ENGINE_LABEL[saved.connection.engine]}</span>
+                <span className="sidebar__block-name">{saved.name}</span>
+                <button
+                  className="btn sql-block__icon"
+                  title="Remove from saved connections"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void removeSavedConnection(saved);
+                  }}
+                >
+                  ✕
+                </button>
               </div>
             ))}
           </div>
@@ -77,7 +119,7 @@ export function HomeScreen() {
                 {dirty && " ●"}
               </button>
             )}
-            <button className="btn-accent" style={{ fontSize: "12px", padding: "7px 20px" }} onClick={() => setShowNew(true)}>
+            <button className="btn-accent" style={{ fontSize: "12px", padding: "7px 20px" }} onClick={() => setNewProjectModalOpen(true)}>
               + New project
             </button>
             <button className="btn" style={{ fontSize: "12px", padding: "7px 20px" }} onClick={openProjectFromDialog}>
@@ -92,7 +134,7 @@ export function HomeScreen() {
         </main>
       </div>
 
-      {showNew && <NewProjectModal onClose={() => setShowNew(false)} />}
+      {isNewProjectModalOpen && <NewProjectModal onClose={() => setNewProjectModalOpen(false)} />}
     </div>
   );
 }

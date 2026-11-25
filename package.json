@@ -9,12 +9,17 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "lsp:install": "node scripts/install-sql-language-server.mjs",
+    "sidecars": "node scripts/build-sidecars.mjs",
+    "tauri:build": "pnpm sidecars && tauri build --config src-tauri/tauri.bundle.conf.json"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",
     "@codemirror/lang-sql": "^6.10.0",
     "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/lsp-client": "^6.3.1",
     "@codemirror/state": "^6.7.0",
     "@codemirror/view": "^6.43.4",
     "@fontsource/jetbrains-mono": "^5.2.8",
@@ -24,6 +29,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "recharts": "^3.10.0",
+    "sql-formatter": "^15.10.0",
     "zustand": "^5.0.3"
   },
   "devDependencies": {

@@ -24,17 +24,12 @@
 **Postgres, MySQL et SQLite sont les trois moteurs absolument indispensables** —
 SQLite seul (v0.1) n'est qu'un point de départ. `sqlx` est précisément choisi pour
 ça : une seule API async couvre les trois via des features de compilation
-(`postgres`, `mysql`, `sqlite`). Conséquences d'archi à anticiper dès maintenant :
+(`postgres`, `mysql`, `sqlite`). **Les trois sont branchés depuis la v0.3**
+(cf. § Connexions et moteurs).
 
-- le moteur devient une **dimension de la connexion** (type + chaîne de
-  connexion), plus un simple chemin de fichier comme en v0.1 ;
-- la commande d'exécution doit router vers le bon pool selon le moteur ;
-- le mapping des types et les spécificités de dialecte (DDL, procédures,
-  `RETURNING`, etc.) diffèrent par moteur — à abstraire proprement.
-
-L'ambition « complète » (cf. `docs/conceptuel.md` § Ambition) implique aussi un
-**gestionnaire de connexions** (créer/éditer/sauver des connexions nommées,
-secrets) plutôt que la sélection de fichier ad hoc actuelle.
+Chaque projet porte **sa** connexion (éditable depuis la toolbar), et une
+**bibliothèque de connexions nommées** permet de les réutiliser d'un projet à
+l'autre (cf. § Connexions et moteurs).
 
 ### Plateformes cibles
 
@@ -58,9 +53,10 @@ Graft cible une **application desktop classique**, pas un canvas plein écran :
 
 - **Barre latérale (sidebar)** : connexions, explorateur de schéma, navigation
   entre notebooks/vues.
-- **Barre de menus native** (Fichier, Édition, Affichage, Fenêtre…) via l'**API
-  Menu de Tauri**, rendue nativement sur **macOS** (menu bar système) et
-  **Windows** (menu de fenêtre).
+- **Barre de menus native** (File, Edit, View, Window + menu App sur macOS)
+  via l'**API Menu de Tauri**, rendue nativement sur **macOS** (menu bar
+  système) et **Windows** (menu de fenêtre) — implémentée, cf. § Barre de
+  menus native.
 - **Canvas** comme surface centrale parmi d'autres (console SQL, grille de
   données, diagrammes…), pas comme l'application entière.
 - **Décors de fenêtre** : natifs par défaut (Fluent sur Windows, traffic-light
@@ -91,9 +87,11 @@ design », design system `graft-design-system`) et est **miroité** dans le repo
   Toute évolution du DS dans Claude Design doit être répercutée dans
   `src/styles/tokens/`. Détails et lien projet en mémoire (`design-system`).
 
-> Le wireframe décrit aussi des éléments **pas encore fonctionnels** rendus en
-> placeholder : explorateur de schéma (introspection v0.3), connexions
-> Postgres/MySQL (v0.3), graphiques, palette de commandes ⌘K, minimap riche.
+> État des éléments du wireframe : la **palette ⌘K** (`CommandPalette.tsx`),
+> la **vue graphique** des résultats (`ChartView.tsx`, Recharts), les **groupes**
+> conteneurs (`GroupNode.tsx`) et l'**explorateur de schéma** SQLite (sidebar)
+> sont fonctionnels. La minimap est celle de React Flow (sans enrichissement).
+> Restent à faire : connexions Postgres/MySQL (v0.3) et minimap riche.
 
 ## Arborescence
 
@@ -104,16 +102,31 @@ Graft/
 ├── vite.config.ts            # config Vite (port fixe 1420 pour Tauri)
 ├── tsconfig.json
 ├── docs/                     # documentation vivante (ce dossier)
+├── scripts/
+│   ├── install-sql-language-server.mjs # `pnpm lsp:install` : installe le LSP pour l'utilisateur
+│   └── build-sidecars.mjs    # `pnpm sidecars` : compile graft-mcp et le place en sidecar Tauri
 ├── src/                      # frontend React
 │   ├── main.tsx              # bootstrap : fonts + tokens + CSS React Flow + thème
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
-│   ├── sqlFormat.ts          # quoteIdent / sqlLiteral (échappement SQL centralisé)
+│   ├── sqlFormat.ts          # quoteIdent / sqlLiteral / sqlEquals (échappement SQL centralisé — pas un formateur)
+│   ├── connection.ts         # connexions : migration ≤ v5, libellé sans secret, validation du formulaire
+│   ├── formatSql.ts          # formatage SQL (sql-formatter, dialecte du moteur, {{favoris}} préservés)
+│   ├── commands.ts           # commandes de l'app (useAppCommands) partagées palette / menus + SHORTCUTS
+│   ├── shortcuts.ts          # libellés de raccourcis par plateforme (⌘⇧F / Ctrl+Shift+F)
+│   ├── useMenuActions.ts     # clic de menu natif → commande (événement `menu-action`) + synchro de l'état grisé
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
 │   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
+│   ├── dialogs/
+│   │   ├── appDialogs.ts     # file de dialogues de l'app (showMessage/showError/askConfirm/askText → promesses)
+│   │   └── AppDialogHost.tsx # rendu du dialogue en tête de file (modale aux tokens du DS)
+│   ├── lsp/
+│   │   ├── languageServer.ts # client LSP partagé (@codemirror/lsp-client) sur l'IPC Tauri
+│   │   └── serverDiagnostics.ts # diagnostics publiés par le serveur, par document → offsets éditeur
 │   ├── store/
 │   │   ├── useGraftStore.ts  # store Zustand (view, pages, nodes/edges de la page active, dbPath, palette, actions)
+│   │   ├── externalMerge.ts  # fusion 3 voies des blocs modifiés hors de l'app (Claude) dans l'état courant
 │   │   └── snippets.ts       # favoris : expansion {{nom}} + normalisation des noms
 │   ├── styles/
 │   │   ├── app.css           # classes de la coquille + composants (issu du wireframe)
@@ -127,11 +140,15 @@ Graft/
 │   ├── screens/
 │   │   └── HomeScreen.tsx    # écran d'accueil (connexions, quick connect, récents)
 │   ├── components/
-│   │   ├── NewProjectModal.tsx # modale de création de projet (nom, emplacement, moteur, fichier SQLite)
-│   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (favoris) — état `paletteOpen` dans le store
+│   │   ├── NewProjectModal.tsx # modale de création de projet (nom, emplacement, connexion)
+│   │   ├── ConnectionForm.tsx  # formulaire de connexion (moteur, cible, mot de passe, SSL, Test connection)
+│   │   ├── ConnectionModal.tsx # édition de la connexion du projet (bouton de connexion de la toolbar)
+│   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (commandes + favoris) — état `paletteOpen` dans le store
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
-│   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
-│   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter
+│   │   ├── Sidebar.tsx       # explorateur de schéma (tables, vues, triggers, routines ; colonnes, index, FK) + favoris + blocs
+│   │   ├── schemaTree.ts     # logique pure de l'explorateur : sections, filtre de recherche, libellés
+│   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter, diagnostics
+│   │   ├── sqlDiagnostics.ts # localisation d'une erreur d'exécution dans le SQL (position moteur ou jeton cité)
 │   │   ├── PageTabs.tsx      # barre d'onglets de pages (Excel-like) en bas du canvas
 │   │   └── StatusBar.tsx     # barre de statut bas
 │   └── canvas/
@@ -141,6 +158,9 @@ Graft/
 │       ├── blockChrome.tsx   # UI partagée bloc SQL / bloc résultat : statut, icônes de vue, pied de résultat
 │       ├── BlockContextMenu.tsx # menu contextuel générique (portail vers <body>)
 │       ├── GroupNode.tsx     # nœud conteneur coloré (parent React Flow) : titre, couleur, resize
+│       ├── TableNodeView.tsx # nœud « table » : une table du schéma posée sur le canvas (colonnes, PK/FK)
+│       ├── tableRefs.ts      # tables référencées par un SQL (scan léger : FROM/JOIN/INTO/UPDATE/TABLE/REFERENCES/ON)
+│       ├── tableLinks.ts     # arêtes dérivées table → bloc (jamais stockées) + tables référencées d'une page
 │       ├── editorRegistry.ts # registre id→EditorView pour insérer depuis la sidebar / la palette
 │       ├── useInnerScroll.ts # scroll molette interne au bloc sélectionné (pinch = zoom canvas)
 │       ├── ResultTable.tsx   # conteneur d'un result set : vue table, pagination client, menus cellule/ligne
@@ -151,25 +171,163 @@ Graft/
 │       ├── rowSql.ts         # SQL des actions par ligne (UPDATE / DELETE / dupliquer / ouvrir) sur table résolue
 │       └── clipboard.ts      # copie presse-papiers
 └── src-tauri/                # backend Rust (Tauri)
-    ├── Cargo.toml            # deps Rust (tauri, sqlx, tokio, plugins)
+    ├── Cargo.toml            # app Tauri + racine du workspace Cargo (membres : crates/*)
+    ├── crates/
+    │   ├── graft-mcp/        # serveur MCP stdio (rmcp) : service.rs (logique testée) + server.rs (tools/resources/prompts)
+    │   └── graft-core/       # moteur partagé app / serveur MCP, sans dépendance Tauri
+    │       └── src/
+    │           ├── db/       # moteurs SQLite / Postgres / MySQL — cf. § Connexions et moteurs
+    │           ├── inserts.rs # INSERT depuis un résultat (portage de orm.ts / resultShape.ts, parent → enfants compris)
+    │           ├── bridge.rs # pont live MCP ↔ app : protocole (ligne JSON + jeton), serveur, client notify
+    │           ├── connections.rs # bibliothèque locale de connexions nommées (sans mot de passe)
+    │           ├── files.rs  # E/S .graft : écriture atomique, règle « .graft uniquement », noms et chemins de projet
+    │           ├── notebook.rs # lecture/édition des blocs d'un .graft en Rust (champs inconnus préservés) + expansion {{favoris}}
+    │           ├── registry.rs # projets connus + autorisation d'écriture MCP par projet (hors du .graft)
+    │           └── secrets.rs  # mots de passe dans le trousseau de l'OS (crate keyring)
     ├── tauri.conf.json       # config app (fenêtre, bundle, identifier)
+    ├── tauri.bundle.conf.json # ajoutée au build de distribution : externalBin graft-mcp
     ├── capabilities/default.json  # permissions du webview : `core:default` uniquement
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
-        ├── db.rs             # moteur SQLite (execute_sql, introspect_schema) + tests
-        ├── notebook.rs       # E/S fichiers (atomique, .graft only / chemins accordés), projets + tests
+        ├── bridge_server.rs  # pont live : écoute 127.0.0.1, bridge.json, événement bridge-project-changed
+        ├── claude_desktop.rs # « Install in Claude Desktop » : fusion de claude_desktop_config.json + tests
+        ├── connection_commands.rs # bibliothèque de connexions nommées (list / save / delete)
+        ├── registry_commands.rs # register_project / get_mcp_writes / set_mcp_writes (registre des projets connus)
+        ├── db_commands.rs    # commandes Tauri sur graft_core::db (execute_sql / introspect_schema / test_connection / mots de passe)
+        ├── notebook.rs       # commandes fichiers (s'appuient sur graft_core::files ; chemins accordés), projets + tests
         ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
-        └── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
+        ├── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
+        ├── lsp.rs            # processus sql-language-server : résolution, framing LSP, pont IPC + tests
+        └── menu.rs           # barre de menus native (File/Edit/View/Window + app macOS) → événement menu-action + tests
 ```
 
 ## Flux de données
 
+### Connexions et moteurs (`src-tauri/src/db/`)
+Le module `db` vit dans le crate **`graft-core`** (`src-tauri/crates/graft-core/src/db/`) et ne dépend pas de Tauri :
+
+| Fichier | Rôle |
+|---------|------|
+| `db/mod.rs` | `QueryResult`, `SqlError`, `Databases` (cache de connexions serveur), `test_connection`, `DEFAULT_MAX_ROWS` |
+| `db/config.rs` | `ConnectionConfig { id, engine, path?, host?, port?, database?, user?, sslMode }` + validation ; **pas de champ mot de passe** |
+| `db/sqlite.rs` | exécution SQLite (connexion par appel), positions d'erreur, introspection par pragmas |
+| `db/server.rs` | exécution commune Postgres/MySQL (`sqlx::raw_sql`), typage des cellules texte |
+| `db/postgres.rs` / `db/mysql.rs` | options de connexion (SSL), position d'erreur Postgres, introspection (`pg_catalog` / `information_schema`) |
+| `db/schema.rs` | `SchemaSnapshot { tables, triggers, routines }` : `TableInfo` (colonnes, clés étrangères, **index**, **définition** des vues), `TriggerInfo`, `RoutineInfo` |
+| `db/integration_tests.rs` | tests contre de vrais serveurs (cf. § Tests d'intégration) |
+
+- **Connexion = moteur + cible.** `ConnectionConfig` est sérialisée dans le
+  `.graft` (v6) ; le **mot de passe** est rangé dans le **trousseau de l'OS**
+  (`src-tauri/src/secrets.rs`, crate `keyring` : Keychain macOS, Credential
+  Manager Windows ; service `com.cactus.graft`, compte = `id` de la connexion).
+  Aucune commande ne renvoie un mot de passe au webview ; `execute_sql` /
+  `introspect_schema` le relisent côté Rust (`db_commands.rs`). Il n'apparaît
+  ni dans le `.graft`, ni dans les messages d'erreur, ni dans les logs.
+- **SQLite** : une connexion par appel (fichier local, rien ne reste
+  verrouillé). **Postgres / MySQL** : `Databases` garde **un pool d'une seule
+  connexion** par connexion configurée — une seule connexion = une seule
+  **session** : `SET`, tables temporaires et transactions se comportent comme
+  dans une console SQL. Le pool est réutilisé tant que la config est identique,
+  et oublié (`forget`) quand le mot de passe change.
+- **Scripts multi-instructions** (migrations, corps de procédures) : côté
+  serveur l'exécution passe par `sqlx::raw_sql` (protocole simple/texte), seul
+  chemin qui les accepte sur les deux moteurs. Le **dernier** jeu de résultats
+  qui renvoie des lignes est affiché ; `rows_affected` est cumulé.
+- **Typage** : en protocole texte toutes les valeurs arrivent en chaîne ;
+  `typed_text_value` les retype d'après le type de colonne (entiers, flottants,
+  booléens `t`/`f` ou `0`/`1`). Un `NUMERIC`/`DECIMAL` devient un nombre
+  **seulement s'il tient sans perte dans un f64** (≤ 15 chiffres
+  significatifs), sinon il reste une chaîne exacte — pas d'arrondi silencieux
+  pour un DBA. JSON, dates, UUID… restent des chaînes.
+- **TLS** : `sslMode` (`disable` / `prefer` / `require` / `verify-full`)
+  mappé sur `PgSslMode` / `MySqlSslMode` ; sqlx compilé avec **rustls** +
+  racines natives (pas d'OpenSSL à embarquer sur Windows/macOS, CA d'entreprise
+  du magasin système honorées).
+- **Positions d'erreur** : Postgres fournit une position (1-based, en
+  caractères) convertie en index JS ; MySQL non (le front se rabat sur
+  `near '…' at line N`).
+- **Rétrocompatibilité** : un `.graft` ≤ v5 (`dbType`/`dbPath`) est lu comme une
+  connexion SQLite (`connectionFromFile`, `src/connection.ts`) et réécrit en v6
+  à la sauvegarde ; v6 continue d'écrire `dbType`/`dbPath` pour les lecteurs
+  plus anciens.
+- **Connexions nommées** (`graft-core/src/connections.rs`,
+  `<données utilisateur>/Graft/connections.json`, commandes
+  `list_saved_connections` / `save_connection` / `delete_saved_connection`) :
+  bibliothèque locale de connexions réutilisables entre projets. Le `.graft`
+  garde **sa copie** de la connexion (le fichier reste autonome quand il est
+  partagé) ; choisir une connexion enregistrée la copie **avec son `id`**, donc
+  les projets qui l'utilisent partagent le mot de passe du trousseau. Noms
+  uniques (casse ignorée), mise à jour par `id`, jamais de mot de passe dans
+  le fichier ; retirer une connexion de la bibliothèque garde son mot de passe
+  (des projets peuvent encore s'en servir). UI : sélecteur « Saved connection »
+  et champ « Save as named connection » dans `ConnectionForm` (création et
+  édition), liste **Connections** sur l'accueil (clic = nouveau projet sur
+  cette connexion, état `newProjectConnection` du store ; ✕ = retirer).
+- **UI** : `ConnectionForm` (moteur, fichier SQLite ou hôte/port/base/
+  utilisateur/mot de passe/SSL, bouton **Test connection** →
+  `test_connection`, connexion jetable non mise en cache) est utilisé par
+  `NewProjectModal` (création) et `ConnectionModal` (édition, ouverte par le
+  bouton de connexion de la toolbar ; mot de passe vide = garder celui du
+  trousseau). Échec d'introspection → `store.schemaError` affiché dans la
+  sidebar, bouton de connexion en rouge, statut « unreachable ».
+- **Linux (dev uniquement)** : le backend `keyutils` rattache le trousseau de
+  session au *thread* ; sans session de login (WSL, Xvfb) chaque thread en
+  créerait un. `secrets::prepare()` le rejoint sur le thread principal au
+  démarrage, avant la création des autres threads, qui en héritent.
+
+### Introspection
+`introspect_schema` renvoie un `SchemaSnapshot` complet, par moteur :
+
+| Objet | SQLite | PostgreSQL | MySQL / MariaDB |
+|-------|--------|------------|-----------------|
+| Tables / vues, colonnes, PK | `sqlite_master` + `pragma_table_info` | `pg_class` / `pg_attribute` / `pg_index` (tables, partitions, vues, vues matérialisées, tables étrangères) | `information_schema.COLUMNS` / `TABLES` |
+| Clés étrangères | `pragma_foreign_key_list` | `pg_constraint` (`unnest(conkey, confkey)`, FK composites) | `KEY_COLUMN_USAGE` |
+| Index (unique, primaire, expressions) | `pragma_index_list` / `pragma_index_info` | `pg_index` + `pg_get_indexdef` par colonne | `STATISTICS` |
+| Définition des vues | SQL de `sqlite_master` | `pg_get_viewdef` | `VIEWS.VIEW_DEFINITION` |
+| Triggers (moment, événements, définition) | SQL de `sqlite_master`, en-tête analysé (`trigger_header`, BEFORE par défaut) | `pg_trigger` (bits de `tgtype` décodés par `trigger_type`) + `pg_get_triggerdef` | `information_schema.TRIGGERS` |
+| Procédures / fonctions (arguments, retour, corps) | — (n'existent pas) | `pg_proc` (`prokind` f/p) + `pg_get_functiondef`, objets d'extensions exclus | `ROUTINES` + `PARAMETERS` |
+
+Postgres : schémas système (`pg_catalog`, `information_schema`, `pg_toast*`,
+`pg_temp*`) exclus ; les objets de `public` ont `schema` vide, les autres
+portent leur schéma. MySQL : base connectée (`DATABASE()`) uniquement, colonnes
+`information_schema` converties en `CHAR` (leur type varie selon la version du
+serveur). Côté store : `dbSchema` = les tables (mis en cache dans le `.graft`,
+index et définitions compris — champs optionnels, les anciens caches restent
+lisibles) ; `schemaObjects = { triggers, routines }` n'est **pas** mis en cache
+(réintrospecté à l'ouverture).
+
+### Explorateur de schéma & autocomplétion par moteur
+- **Sidebar** (`Sidebar.tsx`, logique pure dans `schemaTree.ts`) : sections
+  repliables **Tables**, **Views**, **Triggers**, **Procedures & functions**.
+  Une table/vue se déplie sur ses colonnes (type, badges **PK** / **FK** /
+  **NN**), ses **index** (`PRIMARY KEY (id)`, `UNIQUE (a, b)`…) et ses **clés
+  étrangères** (`col → table.col`). Les objets hors schéma par défaut sont
+  préfixés (`sales.leads`). La recherche filtre noms d'objets, colonnes et
+  table d'un trigger, et déplie la table dont une colonne correspond.
+- Actions : double-clic table/vue → bloc `SELECT * … LIMIT 100` exécuté ;
+  double-clic colonne → `table.colonne` au curseur du bloc actif ; clic droit
+  table/vue → menu (SELECT, insérer le nom, **définition de la vue** dans un
+  nouveau bloc `view`) ; double-clic trigger / routine → sa **définition**
+  dans un nouveau bloc `trigger` / `procedure`.
+- **Autocomplétion** : `SqlEditor` reçoit le moteur de la connexion et choisit
+  le dialecte CodeMirror (`SQLite` / `PostgreSQL` / `MySQL`) pour la
+  coloration, les mots-clés et le quoting des complétions. `store.schema`
+  (dérivé de `dbSchema`) indexe les tables hors schéma par défaut en
+  `schema.table`, que CodeMirror lit comme un espace de noms imbriqué.
+- **SQL généré** (`sqlFormat.ts`) : `setSqlDialect` est synchronisé par le
+  store sur le moteur de la connexion ; `quoteIdent` cite en `` `…` `` pour
+  MySQL (les `"…"` y sont des chaînes sans `ANSI_QUOTES`) et `"…"` ailleurs ;
+  `qualifiedName(name, schema)` ; `sqlLiteral(true)` donne `TRUE` en Postgres
+  (une colonne `boolean` refuse `1`). État de module plutôt que paramètre :
+  il n'y a qu'une connexion active et le SQL est généré à de nombreux endroits.
+
 ### Exécution d'une requête
 1. L'utilisateur clique **▶ Run** sur un bloc → `runBlock(id)` dans le store.
 2. Le store passe le bloc en `running` et appelle la commande Tauri
-   `invoke("execute_sql", { dbPath, sql, maxRows: MAX_FETCH_ROWS })`.
-3. Côté Rust (`db.rs`) : ouverture d'**une** connexion `SqliteConnection` sur
+   `invoke("execute_sql", { connection, sql, maxRows: MAX_FETCH_ROWS })`.
+3. Côté Rust : routage selon `connection.engine` (cf. § Connexions et moteurs).
+   Pour **SQLite** (`db/sqlite.rs`) : ouverture d'**une** connexion `SqliteConnection` sur
    `dbPath` (`SqliteConnectOptions::filename` + `create_if_missing` — pas de
    parsing d'URL, donc les chemins Windows ou contenant `?`/`#` passent tels
    quels ; pas de pool pour une unité de travail unique), puis :
@@ -194,9 +352,9 @@ total (`total_rows`) et un drapeau `truncated` affiché dans le pied du bloc
 (« 5000 / 50000 row(s) · truncated »). L'UI pagine ensuite ces lignes (100/page).
 
 ### Projets (création / ouverture / sauvegarde)
-Un **projet** = un fichier `.graft` + une connexion (type + base). Cycle de vie :
+Un **projet** = un fichier `.graft` + une connexion (`ConnectionConfig`). Cycle de vie :
 
-- **Créer** (`createProject(name, dir, dbType)`) : `create_project_paths` valide
+- **Créer** (`createProject(name, dir, connection, password?)`) : `create_project_paths` valide
   le nom (non vide, ni `.`/`..`, ni séparateur de chemin ni caractère interdit
   sous Windows), **refuse un `.graft` déjà existant** (sinon la première
   sauvegarde l'écraserait), puis dérive `<dir>/<name>.graft` et `<dir>/<name>.db`
@@ -244,6 +402,54 @@ oui.
 - **⌘S / Ctrl+S** sauvegarde (écouteur global dans `App.tsx`, actif sur le
   canvas, y compris depuis un éditeur).
 
+### Modifications faites hors de l'app (ex. Claude via `graft-mcp`)
+Le serveur MCP peut réécrire le `.graft` pendant que l'app l'affiche. Le store
+garde `diskContents` = le texte qu'il a lu ou écrit en dernier :
+- **Surveillance** : toutes les 2 s (`PROJECT_FILE_POLL_MS`, `App.tsx`),
+  `checkProjectFile` lit la date de modification (`project_file_stamp`, peu
+  coûteux) et ne relit le fichier que si elle a changé. Si le contenu diffère
+  de `diskContents` :
+  1. **fusion en direct** (`mergeExternalChange` → `src/store/externalMerge.ts`,
+     3 voies : base = `diskContents`, theirs = disque, mine = l'état courant) :
+     blocs SQL ajoutés par Claude, ou modifiés (SQL, titre, type, position)
+     quand l'utilisateur n'a pas touché ces blocs, sont appliqués **sans
+     question et sans perdre les modifications non sauvegardées**. Sans
+     modification locale, l'état devient le nouveau fichier de référence ;
+     avec, il reste « dirty » et la sauvegarde écrira le résultat fusionné ;
+  2. sinon (autre chose a changé — nom, pages, favoris… —, bloc modifié des
+     deux côtés, bloc modifié par Claude mais supprimé localement), une
+     fenêtre propose **Reload** (bouton danger, avec avertissement s'il y a
+     des modifications non sauvegardées qui seraient perdues). Une seule
+     question à la fois.
+- **À la sauvegarde** (`confirmOverwrite`) : si le fichier sur disque ne
+  correspond plus à `diskContents`, l'app demande avant **Overwrite** au lieu
+  d'écraser silencieusement ; refuser annule la sauvegarde.
+- Le rechargement (`applyProjectFile`, partagé avec l'ouverture) remplace
+  pages, blocs, favoris et connexion, puis réintrospecte.
+- **Pont live** (immédiat, au lieu d'attendre le sondage) : cf. § Pont live
+  MCP ↔ app.
+- `graft-core` écrit le JSON avec `serde_json` + `preserve_order` : l'ordre des
+  clés de l'app est conservé, d'où des diffs Git minimes et une comparaison
+  « rien d'autre n'a changé » fiable pour la fusion.
+
+### Pont live MCP ↔ app (`graft-core/src/bridge.rs`)
+- Au démarrage, l'app (`src-tauri/src/bridge_server.rs`) écoute sur
+  **127.0.0.1**, port aléatoire, et écrit
+  `<données utilisateur>/Graft/bridge.json` = `{ port, token, pid }` (droits
+  `0600` sous Unix ; profil utilisateur sous Windows). Le **jeton** (32 octets
+  aléatoires du système, `getrandom`) est comparé sans court-circuit ; le
+  fichier est supprimé à la fermeture s'il est toujours le sien.
+- Après chaque `create_block` / `update_block`, `graft-mcp` envoie **une ligne
+  JSON** `{ token, event: { kind: "project_changed", path } }` (délai max
+  500 ms ; app fermée → rien n'écoute, on ignore). L'app répond `ok`, émet
+  l'événement Tauri `bridge-project-changed`, et le store
+  (`notifyProjectChanged`) relance tout de suite `checkProjectFile` → fusion
+  en direct. Seul « ce fichier a changé » transite : l'app relit le fichier
+  elle-même, rien d'autre n'est accepté.
+- Vérifié de bout en bout dans l'app : un bloc créé par `graft-mcp` apparaît
+  sur le canvas sans fenêtre, une modification locale non sauvegardée est
+  conservée.
+
 ### Projets récents
 Liste persistée dans **`localStorage`** (`graft.recentProjects`, max 12) :
 `{ name, projectPath, dbType, dbPath, modifiedAt }`. Mise à jour (remontée en tête)
@@ -272,18 +478,178 @@ clic, supprimable (✕).
   `@codemirror/lang-sql` comme `schema` **et** rendu dans la sidebar
   (`Sidebar.tsx`) : arbre tables → colonnes, recherche (filtre sur noms de
   tables + colonnes), bouton **↻** de rafraîchissement manuel.
+- **Erreurs en ligne (diagnostics)** : `execute_sql` renvoie en cas d'échec
+  une erreur structurée `SqlError { message, position }` (`position` = offset
+  dans le SQL exécuté, en unités UTF-16 — un index de chaîne JavaScript).
+  **SQLite** : sqlx n'expose pas `sqlite3_error_offset` et efface l'état
+  d'erreur avant qu'on puisse le lire ; `db/sqlite.rs` **re-prépare** donc (sans
+  rien exécuter) les instructions une à une via `libsqlite3-sys` (même version
+  que celle de sqlx) jusqu'à celle qui échoue avec le **même message**, et lit
+  l'offset à ce moment-là (relatif à l'instruction → rendu absolu). Si
+  l'erreur dépend d'une instruction précédente exécutée (table créée plus
+  haut), la re-préparation échoue autrement et aucune position n'est
+  annoncée. `runBlock` appelle ensuite `locateError`
+  (`components/sqlDiagnostics.ts`, pur et testé) qui choisit la plage à
+  souligner : la position moteur si le SQL a été exécuté tel quel (pas de
+  `{{favori}}` expansé, sinon les offsets pointeraient dans l'expansion), sinon
+  le jeton cité par le message (`near "FORM"` pour SQLite/Postgres,
+  `near '…' at line N` pour MySQL, recherché à partir de la ligne indiquée),
+  sinon la première ligne non vide. Le résultat est stocké sur le bloc source
+  (`data.editorError = { from, to, message }`, transitoire : remis à zéro à la
+  sauvegarde, au run suivant et à la première édition) et appliqué par
+  `SqlEditor` via `setDiagnostics` (`@codemirror/lint`, extension `linter(null)`
+  déclarée d'office : sinon celle que `setDiagnostics` ajoute à la volée
+  disparaît — avec le soulignement — à chaque reconfiguration de l'éditeur,
+  ex. rafraîchissement du schéma ou arrivée du LSP) : soulignement ondulé
+  `--error` + infobulle au survol. Le message reste aussi affiché sous
+  l'éditeur.
 - Le nœud (`SqlBlockNode`) expose aussi **titre éditable** (double-clic),
   **dupliquer** (⧉), **supprimer** (✕) et **▶ Run** — le run est aussi
   déclenché par `Mod-Enter`.
+
+### Dialogues de l'app
+Les `alert` / `confirm` / `prompt` du webview sont **proscrits** (aspect
+navigateur sur macOS/Windows, bloquants). `src/dialogs/appDialogs.ts` expose
+`showMessage` / `showError` / `askConfirm` / `askText`, qui renvoient une
+**promesse** et ajoutent une requête à une petite file Zustand
+(`useDialogStore`) : deux erreurs successives sont donc affichées l'une après
+l'autre. `AppDialogHost` (monté à la racine de `App`, accueil et canvas) rend la
+première requête avec les classes `.modal` / `.btn-accent` / `.btn-danger`
+bâties sur les tokens (`--error`, `--panel`, `--shadow-modal`…) ; Entrée valide
+un champ texte, Échap annule, les touches ne fuient pas vers le canvas.
+Utilisés par : erreurs d'ouverture/sauvegarde/création de projet, import/export,
+génération d'INSERT, formatage, nom d'un favori (`askText`), suppression d'un
+favori (`askConfirm`, bouton danger). La confirmation « modifications non
+sauvegardées » reste un **dialogue natif** (`confirm_dialog`, comme la garde de
+fermeture côté Rust).
+
+### Barre de menus native (`src-tauri/src/menu.rs`)
+Construite avec l'API Menu de Tauri 2 au démarrage (`Builder::menu(menu::build)`) :
+
+| Menu | Contenu |
+|------|---------|
+| **Graft** (macOS seulement) | About, Services, Hide / Hide Others / Show All, Quit |
+| **File** | New Project… (⌘N / Ctrl+N), Open Project… (⌘O / Ctrl+O), New Block ▸ (6 types), New Group, New Page, Save (⌘S / Ctrl+S), Import Data File…, Home Screen (⌘⇧H / Ctrl+Shift+H) ; **Exit** en fin de menu hors macOS |
+| **Edit** | Undo, Redo, Cut, Copy, Paste, Select All (éléments prédéfinis — indispensables au presse-papiers du webview sur macOS), Run Block (⌘↵ / Ctrl+Enter), Run All Blocks (⌘⇧↵ / Ctrl+Shift+Enter), Format SQL (⇧⌥F / Shift+Alt+F) |
+| **View** | Command Palette… (⌘K / Ctrl+K), Zoom In / Out (⌘= / ⌘-), Fit Canvas (⌘0), Refresh Schema ; Enter Full Screen sur macOS |
+| **Window** | Minimize, Maximize/Zoom, Close Window ; sur macOS Bring All to Front + `set_as_windows_menu_for_nsapp` (liste des fenêtres gérée par le système) |
+
+- Les accélérateurs utilisent `CmdOrCtrl` → **Cmd sur macOS, Ctrl sur
+  Windows**. Pas de polissage spécifique Linux (il reçoit le menu Windows).
+- **Routage** : chaque élément personnalisé porte l'**id d'une commande
+  front** (`src/commands.ts`). `on_menu_event` → `menu::forward_event` émet
+  l'événement `menu-action` (payload = id) ; `useMenuActions` (monté dans
+  `App`, au-dessus des deux écrans) exécute la commande correspondante si elle
+  est active (`isEnabled` : les commandes du canvas sont inactives sur
+  l'accueil). La palette et le menu partagent donc exactement les mêmes
+  actions. « New Project… » ramène à l'accueil et ouvre la modale (état
+  `isNewProjectModalOpen` du store).
+- **Double déclenchement** : selon la plateforme, un accélérateur de menu et
+  l'écouteur clavier du webview (Mod-Enter de CodeMirror, ⌘S, ⌘K) peuvent
+  tous deux réagir. Les actions sont donc rendues sûres : `runBlock` ignore un
+  bloc déjà `running` (jamais deux exécutions d'un même SQL), sauvegarder deux
+  fois est inoffensif, la commande palette du menu *ouvre* (ne bascule pas).
+- **Tests** (`cargo test menu`) : ids et accélérateurs uniques, chaque id
+  existe dans `src/commands.ts`, chaque accélérateur y figure sous sa forme
+  `Mod+…` (`SHORTCUTS`) pour que palette et menu affichent le même raccourci.
+- **État grisé synchronisé** : `menu::build` garde les poignées des éléments
+  (`CommandMenuItems`) ; `useMenuActions` envoie `set_menu_states`
+  (`{ id: enabled }`, d'après `isEnabled` des commandes) au démarrage et à
+  chaque changement d'écran ou de bloc focalisé, seulement si l'état a changé.
+  Ex. : sur l'accueil, Save, New Group, Run Block… sont grisés.
+- **Course clavier atténuée** : les commandes qui lisent le texte de
+  l'éditeur (`block.run`, `block.runAll`, `sql.format` — `EDITOR_COMMANDS`)
+  attendent `EDITOR_SETTLE_MS` (60 ms) quand elles viennent du menu, le temps
+  que les frappes déjà parties vers le webview y arrivent.
+
+### Formatage SQL
+- `src/formatSql.ts` : `formatSql(sql, dbType)` s'appuie sur **`sql-formatter`**
+  (dialecte `sqlite` / `postgresql` / `mysql` selon le moteur du projet,
+  mots-clés en majuscules, indentation 2). Dépendance ajoutée car
+  `sql-language-server` n'expose **pas** de formatage (pas de
+  `documentFormattingProvider`) et `src/sqlFormat.ts` ne fait que de
+  l'échappement. Les références `{{favori}}` sont déclarées comme paramètres
+  personnalisés : elles restent intactes.
+- `store.formatBlock(id)` / `formatFocusedBlock()` : remplace le SQL **via
+  l'éditeur** quand il est monté (`replaceEditorContent` du registre → la
+  modification est annulable par Ctrl/Cmd+Z), sinon directement dans le
+  store. SQL non analysable → texte inchangé, erreur signalée.
+- Points d'entrée : raccourci **Shift+Alt+F** (⇧⌥F sur macOS) dans l'éditeur,
+  entrée **Format SQL** du menu contextuel du bloc, commande **Format SQL** de
+  la palette.
+
+### Palette de commandes (⌘K)
+`CommandPalette.tsx` liste les **commandes de l'app** (`useAppCommands` dans
+`src/commands.ts` : formater, exécuter le bloc focalisé / tout, nouveau bloc
+par type, groupe, page, sauvegarder, importer, rafraîchir le schéma, zoom,
+accueil) puis les **favoris**. Une commande désactivée (ex. « Format SQL »
+sans bloc focalisé) n'est pas proposée. La même liste alimente la barre de
+menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
+`Mod+Shift+F`) et affichés selon la plateforme (`shortcutLabel`).
+
+### Serveur de langage SQL (LSP) — `sql-language-server`
+
+**Choix de livraison : processus externe optionnel, résolu à l'exécution**
+(pas de sidecar Tauri embarqué pour l'instant).
+
+- `sql-language-server` (joe-re, choix acté dans `CLAUDE.md`) est un programme
+  **Node** : l'embarquer en sidecar suppose d'embarquer un runtime Node (ou de
+  le compiler en binaire autonome), et il dépend du module natif `sqlite3`,
+  compilé par plateforme. Le paquet publié (1.7.1) casse en plus avec la
+  version de `vscode-languageserver-protocol` résolue par défaut
+  (`ERR_PACKAGE_PATH_NOT_EXPORTED`) : il faut épingler la 3.16.0. Trop fragile
+  pour un bundle macOS/Windows à ce stade.
+- **Installation** : `pnpm lsp:install` (`scripts/install-sql-language-server.mjs`)
+  l'installe dans le dossier de données utilisateur
+  (`~/Library/Application Support/Graft/sql-language-server` sur macOS,
+  `%APPDATA%\Graft\sql-language-server` sur Windows) avec la version de
+  protocole épinglée et `--ignore-scripts` (le driver natif `sqlite3` n'est
+  pas utilisé, cf. plus bas).
+- **Résolution** (`src-tauri/src/lsp.rs`, `resolve_command`) : variable
+  `GRAFT_SQL_LANGUAGE_SERVER` → exécutable à côté du binaire Graft (emplacement
+  d'un futur sidecar) → installation utilisateur ci-dessus → `PATH`. Absent →
+  `lsp_start` renvoie `false` et l'éditeur garde son autocomplétion native :
+  **dégradation silencieuse**, rien n'est cassé.
+- **Pont** : le webview ne peut pas lancer de processus. `lsp_start` lance
+  `sql-language-server up --method stdio` (une seule instance, réutilisée) ;
+  un thread lit stdout, découpe les messages (en-têtes `Content-Length`,
+  `read_message`) et les émet en événements Tauri `lsp-message` ; `lsp_send`
+  encadre (`encode_message`) et écrit sur stdin. Le protocole lui-même est géré
+  côté front par **`@codemirror/lsp-client`** (`src/lsp/languageServer.ts`,
+  transport sur l'IPC Tauri). Seul `LSPPlugin.create` (synchro du document)
+  est branché dans l'éditeur, pas `languageServerSupport` : ses keymaps
+  détourneraient Shift+Alt+F vers un formatage LSP que ce serveur n'offre pas.
+  Le client déclare la capacité `workspace.configuration`, sans laquelle le
+  serveur **ignore** `didChangeConfiguration` (donc la config lint). Un seul client pour tous les blocs ; chaque bloc
+  est un document `file:///graft/<id>.sql`.
+- **Apport** : complétions du serveur (`serverCompletionSource`) ajoutées aux
+  sources existantes (schéma + mots-clés), et diagnostics `sqlint`. Les règles
+  de mise en page de sqlint (alignements, retours à la ligne, casse des
+  mots-clés) sont **désactivées** — elles se battent avec un éditeur libre sur
+  canvas ; restent `space-surrounding-operators` et
+  `require-as-to-rename-column` en avertissement.
+- **Diagnostics du serveur = niveau « info »** (`src/lsp/serverDiagnostics.ts`,
+  fusionnés avec l'erreur d'exécution dans `SqlEditor`) : son parseur ne couvre
+  qu'un sous-ensemble de SQL et signale à tort `PRAGMA`, `CREATE TRIGGER` ou les
+  procédures — exactement le travail d'un DBA. Le moteur reste seul juge des
+  erreurs (niveau « error »).
+- **Confidentialité** : le serveur journalise **tout** ce qu'il reçoit (niveau
+  debug forcé) dans `<tmp>/sql-language-server.log`, SQL des blocs compris.
+  Graft ne lui transmet donc **aucune connexion ni identifiant** — le schéma
+  vient de l'introspection native de Graft.
 
 ## Commandes Tauri exposées (`lib.rs`)
 
 | Commande | Signature | Rôle |
 |----------|-----------|------|
-| `execute_sql` | `(db_path: String, sql: String, max_rows: Option<usize>) -> Result<QueryResult, String>` | exécute un statement SQLite ; **plafonne** les lignes renvoyées (défaut 5000) |
-| `introspect_schema` | `(db_path: String) -> Result<Vec<TableInfo>, String>` | structure SQLite : tables/vues, colonnes (type, notnull, pk) et **clés étrangères** |
+| `execute_sql` | `(connection: ConnectionConfig, sql: String, max_rows: Option<usize>) -> Result<QueryResult, SqlError>` | exécute du SQL (script multi-instructions accepté) sur le moteur de la connexion ; **plafonne** les lignes (défaut 5000) ; erreur = `{ message, position }` |
+| `introspect_schema` | `(connection) -> Result<SchemaSnapshot, SqlError>` | structure de la base : tables/vues, colonnes (type, notnull, pk), **clés étrangères** |
+| `test_connection` | `(connection, password: Option<String>) -> Result<String, SqlError>` | connexion jetable, renvoie la version du serveur ; mot de passe saisi ou, à défaut, celui du trousseau |
+| `set_connection_password` | `(connection_id, password) -> Result<(), String>` | range le mot de passe dans le trousseau (vide = supprimer) et ferme la connexion ouverte |
+| `has_connection_password` | `(connection_id) -> Result<bool, String>` | indique si un mot de passe est stocké (jamais sa valeur) |
 | `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` (atomique) |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
+| `project_file_stamp` | `(path: String) -> Result<u64, String>` | date de modification (ms) d'un `.graft`, pour détecter les changements externes |
 | `write_text_file` | `(path: String, contents: String) -> Result<(), String>` | écrit un fichier texte (export `.sql`, atomique) — **chemin accordé en écriture** requis |
 | `read_text_file` | `(path: String) -> Result<String, String>` | lit un fichier texte (import `.json`/`.sql`) — **chemin accordé en lecture** requis |
 | `pick_project_file` | `() -> Result<Option<String>, String>` | dialogue « ouvrir un `.graft` » |
@@ -292,11 +658,18 @@ clic, supprimable (✕).
 | `pick_import_file` | `() -> Result<Option<String>, String>` | dialogue import `.json`/`.sql` ; **accorde la lecture** du chemin choisi |
 | `pick_export_file` | `(default_name: String) -> Result<Option<String>, String>` | dialogue export `.sql` ; **accorde l'écriture** du chemin choisi |
 | `confirm_dialog` | `(title, message, ok_label) -> Result<bool, String>` | confirmation native OK/Annuler |
+| `set_menu_states` | `(states: { [id]: bool })` | grise / active les éléments du menu natif selon le contexte |
 | `set_unsaved_changes` | `(dirty: bool)` | reflète l'état « non sauvegardé » pour la garde fermeture/quit |
+| `lsp_start` | `() -> Result<bool, String>` | lance `sql-language-server` s'il est installé (idempotent) ; `false` sinon |
+| `lsp_send` | `(message: String) -> Result<(), String>` | envoie un message JSON-RPC au serveur (réponses : événement `lsp-message`) |
+| `register_project` | `(path, name) -> Result<(), String>` | inscrit le projet dans le registre local (seuls ces projets sont accessibles au MCP) |
+| `get_mcp_writes` / `set_mcp_writes` | `(path[, allow])` | lit / règle l'autorisation d'écriture de Claude (MCP) pour le projet |
+| `install_claude_desktop` | `() -> Result<String, String>` | inscrit le sidecar `graft-mcp` dans la config de Claude Desktop ; renvoie le chemin du fichier écrit |
+| `list_saved_connections` / `save_connection` / `delete_saved_connection` | `() / (name, connection) / (id)` | bibliothèque des connexions nommées (renvoie la liste à jour) |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
-> Convention : `db_path`/`sql` côté Rust (snake_case) ↔ `dbPath`/`sql` côté JS
+> Convention : `connection_id`/`max_rows` côté Rust (snake_case) ↔ `connectionId`/`maxRows` côté JS
 > (Tauri convertit automatiquement le camelCase en snake_case).
 
 ## Sécurité du webview
@@ -343,11 +716,19 @@ unique « Page 1 » (`pagesFromFile`). Les nœuds ont la même forme qu'avant.
 
 ```jsonc
 {
-  "version": 4,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages (rétro-compatible en lecture)
+  "version": 6,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages · 5 schéma en cache + favoris · 6 connexion (rétro-compatible en lecture)
   "name": "analytics",
-  "dbType": "sqlite",                      // sqlite | postgres | mysql
-  "dbPath": "/chemin/vers/base.sqlite",   // ou null
+  "dbType": "postgres",                    // = connection.engine (gardé pour les lecteurs < v6)
+  "dbPath": null,                          // fichier SQLite, sinon null (gardé pour les lecteurs < v6)
+  "connection": {                          // v6 — jamais de mot de passe (trousseau de l'OS, clé = id)
+    "id": "conn-…", "engine": "postgres",
+    "host": "db.internal", "port": 5432, "database": "shop", "user": "ada", "sslMode": "require"
+  },
+  "dbSchema": [ /* TableInfo[] — cf. « Schéma en cache » */ ],
+  "snippets": [ { "id": "block-...", "name": "recent_users", "sql": "SELECT …", "blockType": "query" } ],
   "pages": [{ "id": "page-...", "name": "Page 1", "nodes": [
+    { "id": "block-...", "type": "tableNode", "position": { "x": -260, "y": 80 },
+      "data": { "table": "orders", "schema": "sales" } },  // table posée sur le canvas (liens dérivés, non stockés)
     {
       "id": "block-...",
       "type": "sqlBlock",                  // sqlBlock | resultBlock | group
@@ -432,11 +813,18 @@ traitée comme une **vraie source de données relationnelle**. Tout y est pur
   (`detectNestedShape`) **et** que les deux côtés correspondent à des tables
   réelles, sort des INSERT **relationnels** : un INSERT parent puis ses enfants,
   avec la FK renseignée : valeur explicite de la colonne visée par la FK (ou de
-  la PK) si elle est sélectionnée, sinon la sous-requête
-  `(SELECT <clé> FROM <parent> ORDER BY rowid DESC LIMIT 1)`. On n'utilise
-  **pas** `last_insert_rowid()` : dès le premier INSERT enfant il désigne
-  l'enfant, et le 2ᵉ enfant aurait été rattaché au 1ᵉʳ. Une ligne sans colonne
-  mappable devient `INSERT … DEFAULT VALUES`. Sinon, repli sur des INSERT plats
+  la PK) si elle est sélectionnée, sinon la **clé générée du dernier parent**,
+  selon le moteur (`lastInsertedKey`) : SQLite → sous-requête
+  `(SELECT <clé> FROM <parent> ORDER BY rowid DESC LIMIT 1)` ; Postgres →
+  `currval(pg_get_serial_sequence('"<parent>"', '<clé>'))` (serial / identity,
+  insensible aux INSERT dans d'autres tables) ; MySQL → variable de session
+  `SET @graft_key_<parent> = LAST_INSERT_ID();` émise juste après l'INSERT
+  parent (`captureInsertedKey`), puis `@graft_key_<parent>` dans les enfants.
+  Les fonctions « dernier id » ne sont jamais utilisées directement : dès le
+  premier INSERT enfant elles désignent l'enfant, et le 2ᵉ enfant aurait été
+  rattaché au 1ᵉʳ. Vérifié sur PostgreSQL 16 et MariaDB 10.11. Une ligne sans
+  colonne mappable devient `INSERT … DEFAULT VALUES` (`INSERT … () VALUES ()`
+  en MySQL). Sinon, repli sur des INSERT plats
   ligne à ligne,
   avec un placeholder `«table»` si aucune table ne correspond.
 - `jsonToInserts(json, schema)` — l'inverse à l'import : les champs scalaires
@@ -449,7 +837,7 @@ Exposé par : menu contextuel d'un bloc/résultat (**Generate INSERTs → new
 block**, **Copy INSERTs**, **Export INSERTs (.sql)…**) et bouton **Import…** de
 la toolbar (`.json` imbriqué → INSERT multi-tables, `.sql` → chargé tel quel
 dans un bloc `script`). E/S fichier via les commandes `write_text_file` /
-`read_text_file`. Le formatage SQL (`quoteIdent`/`sqlLiteral`) est centralisé
+`read_text_file`. L'échappement SQL (`quoteIdent`/`sqlLiteral`) est centralisé
 dans `src/sqlFormat.ts`.
 
 **Pages en mémoire** — le store garde `pages: Page[]` + `activePageId`, et
@@ -529,6 +917,30 @@ pas un enfant : elle reste toujours la dernière ligne du bloc et ne peut pas
 flotter par-dessus les données (un `position: sticky` s'y comportait mal dans ce
 contexte flex imbriqué).
 
+### Liens blocs ↔ tables (`tableNode`)
+- Un nœud **`tableNode`** (`data: { table, schema? }`, `TableNodeView.tsx`) pose
+  une table du schéma sur le canvas ; ses colonnes viennent du schéma
+  introspecté (à jour après une migration ; cadre pointillé si la table
+  n'existe plus). Persisté dans la page comme les autres nœuds, **sans** état
+  d'exécution, largeur fixe (220), hauteur selon les colonnes (12 max, puis
+  « +N more »).
+- Les **liens** sont **dérivés** : `tableLinkEdges` (`tableLinks.ts`) relie
+  chaque bloc SQL aux nœuds table de la page que son SQL référence
+  (`referencedTableKeys`, `tableRefs.ts` : commentaires et chaînes ignorés,
+  identifiants nus ou cités `"…"`/`` `…` ``/`[…]`, noms qualifiés
+  `schema.table`, listes `FROM a, b`, alias sautés ; un nom non qualifié
+  correspond aussi à une table d'un autre schéma). Arêtes pointillées
+  `--info`, tracées **table → bloc**, non sélectionnables ni supprimables,
+  ajoutées à l'affichage dans `GraftCanvas` seulement : **jamais stockées
+  ni sauvegardées**, elles suivent le SQL. Purement visuelles, aucune
+  sémantique d'exécution (cf. questions ouvertes). Un cache
+  (`WeakMap` schéma → SQL → tables) évite de rescanner le SQL à chaque image
+  pendant un déplacement.
+- Ajout : clic droit sur une table/vue de la sidebar → **Add to canvas**
+  (`addTableNode`, sans doublon par page) ; commande **Add referenced tables
+  to canvas** (palette, menu View) → `addReferencedTables` empile les tables
+  référencées absentes à gauche des blocs.
+
 ### Bloc résultat lié (`resultBlock`)
 
 Quand `emitToBlock: true` sur un bloc SQL, l'exécution ne remplit plus le
@@ -574,12 +986,14 @@ Un nœud `group` (`GroupNode.tsx`, data `GroupBlockData { title, color }`) est u
 ```bash
 pnpm install        # deps frontend
 pnpm tauri dev      # lance l'app desktop (Vite + compile Rust + ouvre la fenêtre)
-pnpm tauri build    # build un binaire distribuable
+pnpm tauri:build    # build distribuable AVEC le sidecar graft-mcp (pnpm sidecars + config de bundle)
+pnpm tauri build    # build distribuable sans sidecar
 pnpm build          # type-check (tsc) + build frontend seul
 cargo check         # (dans src-tauri/) vérifie le backend Rust
 pnpm test           # tests frontend (Vitest, une passe)
 pnpm test:watch     # Vitest en mode watch
-cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs / scope.rs
+cargo test --workspace # (dans src-tauri/) tests de l'app et de graft-core + intégration si configurée
+pnpm lsp:install    # installe sql-language-server (optionnel) pour l'utilisateur courant
 ```
 
 **Tests frontend (Vitest)** — fichiers `*.test.ts` à côté du code testé,
@@ -592,15 +1006,44 @@ remplacés par des faux via `vi.mock`). Fixtures de schéma : `src/test/schema.t
 > Sous Linux/WSL, `cargo check`/`cargo test` exigent les libs de dev GTK/WebKit
 > de Tauri (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`…).
 
+### Tests d'intégration Postgres / MySQL
+`src-tauri/src/db/integration_tests.rs` exerce chaque moteur de bout en bout
+(test de connexion, script multi-instructions, valeurs typées, plafond de
+lignes, introspection PK/FK/index/vue/trigger/procédure et fonction, position
+d'erreur, mauvais mot de passe refusé).
+Chaque test **passe sans rien faire** si sa variable d'environnement est
+absente ; avec elle, il crée et supprime ses propres tables `graft_it_*` :
+
+```bash
+GRAFT_TEST_POSTGRES="host=127.0.0.1 port=5432 user=postgres password=… dbname=postgres" \
+GRAFT_TEST_MYSQL="host=127.0.0.1 port=3306 user=graft password=… dbname=graft_test" \
+cargo test end_to_end
+```
+
+Serveurs jetables, par exemple avec Docker :
+
+```bash
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=graftpw postgres:16
+docker run --rm -d -p 3306:3306 -e MYSQL_ROOT_PASSWORD=graftpw -e MYSQL_DATABASE=graft_test mysql:8
+```
+
+(Validés sur PostgreSQL 16 et MariaDB 10.11.)
+
+> Le test `lsp::tests::initializes_a_real_server_when_installed` ne s'exécute
+> vraiment que si `GRAFT_SQL_LANGUAGE_SERVER` pointe sur un serveur (sinon il
+> passe sans rien faire) :
+> `GRAFT_SQL_LANGUAGE_SERVER=<data>/Graft/sql-language-server/node_modules/.bin/sql-language-server cargo test lsp`.
+
 > Si `cargo` est introuvable dans une nouvelle session : `source "$HOME/.cargo/env"`.
 
-## Intégration Claude — MCP / connecteur personnalisé (à faire)
+## Intégration Claude — MCP / connecteur personnalisé
 
 **Besoin acté :** Graft devra s'intégrer à **Claude** pour que l'assistant puisse
 travailler *dans* un projet Graft — lire le schéma, lire/écrire des blocs,
 exécuter des requêtes, proposer des migrations — depuis Claude Desktop, Claude
 Code ou claude.ai. Le véhicule standard est le **Model Context Protocol (MCP)**.
-Rien n'est implémenté à ce stade ; cette section fixe la direction.
+Le **serveur MCP local** (`graft-mcp`) est implémenté (cf. § Serveur MCP
+`graft-mcp` ci-dessous) ; le reste de cette section fixe la direction.
 
 **Deux formes, à phaser :**
 
@@ -634,10 +1077,12 @@ Rien n'est implémenté à ce stade ; cette section fixe la direction.
 **Synchronisation avec l'app ouverte.** Si le serveur MCP modifie un `.graft`
 pendant que l'app l'affiche, les deux versions divergent (aujourd'hui la
 sauvegarde de l'app écraserait les changements de Claude). Étapes :
-(a) l'app **surveille** le fichier ouvert et propose de recharger / fusionne ;
-(b) plus tard, un **pont local** (socket localhost authentifié par jeton, exposé
-par l'app Tauri) auquel le serveur MCP parle quand l'app est ouverte, pour que
-les blocs créés par Claude apparaissent **en direct** sur le canvas.
+(a) l'app **surveille** le fichier ouvert et propose de recharger — **fait**
+(cf. § Modifications faites hors de l'app) ;
+(b) un **pont local** (socket localhost authentifié par jeton, exposé par l'app
+Tauri) auquel le serveur MCP parle quand l'app est ouverte, pour que les blocs
+créés par Claude apparaissent **en direct** sur le canvas — **fait** (cf.
+§ Pont live MCP ↔ app).
 
 **Garde-fous (non négociables pour une audience DBA) :**
 - `run_query` **en lecture seule par défaut** (connexion SQLite ouverte en
@@ -650,6 +1095,99 @@ les blocs créés par Claude apparaissent **en direct** sur le canvas.
   explicitement accordés) ; pas de lecture/écriture de chemins arbitraires.
 - Jamais d'identifiants (mots de passe Postgres/MySQL) dans les réponses ; les
   secrets vivent dans le trousseau de l'OS.
+
+### Serveur MCP `graft-mcp` (implémenté)
+Binaire Rust `src-tauri/crates/graft-mcp` (SDK officiel **`rmcp`**, transport
+**stdio**), lancé par le client Claude ; **l'app n'a pas besoin d'être
+ouverte**. `service.rs` porte la logique (testée sans le protocole),
+`server.rs` la couche MCP. stdout = protocole, diagnostics sur stderr.
+
+| Tool | Rôle |
+|------|------|
+| `list_projects` | projets connus : nom, chemin, moteur, nom de base, écritures autorisées |
+| `get_schema` | introspection live (tables/vues, colonnes, clés, index, triggers, routines) ; repli sur le schéma en cache du `.graft` si la base est injoignable (`live: false`) |
+| `list_blocks` / `read_block` | blocs SQL (id, page, titre, type, SQL) |
+| `create_block` / `update_block` | écrit le `.graft` (format de l'app, champs inconnus préservés) ; **n'exécute rien** |
+| `run_query` | **une** instruction, **lecture seule** |
+| `run_block` | SQL du bloc, `{{favoris}}` **expansés comme `runBlock`**, lecture seule |
+| `execute_write` | DML/DDL — **refusé** sauf si le projet l'autorise |
+| `generate_inserts` | INSERT reproduisant les lignes d'une requête/d'un bloc — portage Rust de `orm.ts` + `resultShape.ts` : parent → enfants (FK reliée par moteur) quand le résultat d'un JOIN s'y prête, sinon INSERT plats |
+| `explain_query` | `EXPLAIN QUERY PLAN` (SQLite) / `EXPLAIN` (Postgres, MySQL) — **jamais `ANALYZE`**, qui exécuterait la requête |
+
+- **Resources** : `graft://projects/<projet>/schema` (JSON) et
+  `graft://projects/<projet>/blocks/<id>` (SQL du bloc), noms encodés en
+  pourcentage.
+- **Prompts** : `write_migration` (projet, objectif → schéma résumé, consigne
+  d'enregistrer la migration comme bloc plutôt que l'exécuter),
+  `explain_plan` (projet, SQL → plan joint), `document_schema`.
+
+**Garde-fous :**
+- **Projets connus seulement** : `graft_core::registry`
+  (`<données utilisateur>/Graft/projects.json`), alimenté par l'app à chaque
+  création / ouverture / sauvegarde (`register_project`, appelé par
+  `touchRecent`). Un projet se désigne par son nom (s'il est unique) ou son
+  chemin exact ; tout autre chemin est refusé, et seuls des `.graft` sont lus
+  ou écrits.
+- **Lecture seule par défaut** (`graft_core::db::execute_read_only`, sur une
+  connexion **jetable**, jamais la session de l'app) : SQLite ouvert en
+  `SQLITE_OPEN_READONLY` ; Postgres : l'instruction doit se **préparer** comme
+  une **seule** instruction (donc pas de `COMMIT; DELETE …`), session avec
+  `default_transaction_read_only=on`, exécution dans `BEGIN READ ONLY` puis
+  `ROLLBACK` ; MySQL : idem + **liste blanche** du premier mot-clé (`SELECT`,
+  `WITH`, `SHOW`, `EXPLAIN`, `DESCRIBE`, `VALUES`, `TABLE`), car MySQL valide
+  implicitement la transaction avant un DDL. Testé contre Postgres 16 et
+  MariaDB 10.11 (DELETE, `SELECT 1; DELETE`, `COMMIT; DELETE`, CREATE, DROP
+  refusés ; rien n'est modifié).
+- **Écritures opt-in par projet** : `execute_write` n'agit que si
+  « Allow Claude (MCP) to modify this database » est coché dans la fenêtre
+  Connection de l'app (`set_mcp_writes`). Le réglage est stocké dans le
+  registre **local**, pas dans le `.graft` : un projet partagé via Git ne peut
+  pas s'auto-autoriser. Côté client, Claude Desktop demande en plus
+  confirmation à chaque appel d'outil.
+- **Plafond** : 100 lignes par défaut, 1000 au maximum (`max_rows`).
+- **Pas d'identifiants** : mots de passe lus dans le trousseau, jamais
+  renvoyés ; `list_projects` ne donne que moteur + nom de base. Sur macOS, le
+  Trousseau demandera une fois d'autoriser `graft-mcp` à lire le mot de passe
+  (exécutable distinct de l'app).
+
+**Livraison — sidecar Tauri.** `pnpm sidecars` (`scripts/build-sidecars.mjs`)
+compile `graft-mcp` en release et le copie en
+`src-tauri/binaries/graft-mcp-<triplet hôte>[.exe]` (ignoré par Git).
+`pnpm tauri:build` enchaîne `pnpm sidecars` puis
+`tauri build --config src-tauri/tauri.bundle.conf.json`, qui ajoute
+`bundle.externalBin: ["binaries/graft-mcp"]` : Tauri installe le binaire **à
+côté de l'exécutable** de l'app (`Contents/MacOS/` sur macOS, dossier
+d'installation sur Windows). L'`externalBin` est dans une config à part pour
+que `pnpm tauri dev` et `cargo test` ne dépendent pas d'un binaire release
+préalable. À lancer sur chaque plateforme cible (build de l'hôte).
+
+**« Install in Claude Desktop… »** (menu File, palette) →
+`install_claude_desktop` (`src-tauri/src/claude_desktop.rs`) : trouve
+`graft-mcp` à côté de l'exécutable de l'app (en dev : `target/<profil>/`,
+après `cargo build -p graft-mcp`), puis écrit l'entrée
+`mcpServers.graft = { command, args: [] }` dans
+`<config>/Claude/claude_desktop_config.json` (`dirs::config_dir()` :
+`~/Library/Application Support` sur macOS, `%APPDATA%` sur Windows).
+`merge_config` garde tous les autres réglages et serveurs, **refuse** un
+fichier qui n'est pas un objet JSON plutôt que de l'écraser, et la version
+précédente est copiée en `claude_desktop_config.json.bak` ; écriture atomique.
+
+**Configuration manuelle** (Claude Desktop, `claude_desktop_config.json`) :
+
+```json
+{ "mcpServers": { "graft": { "command": "/chemin/vers/graft-mcp" } } }
+```
+
+Construire le binaire : `cargo build --release -p graft-mcp` (dans
+`src-tauri/`). Tests : `cargo test -p graft-mcp` (outils sur un projet SQLite
+temporaire + URI des ressources).
+
+**Avancement :** `graft-core` est extrait (workspace Cargo `src-tauri/`) avec
+le moteur multi-base, les E/S `.graft`, un modèle Rust du `.graft`
+(`notebook.rs` : lister/lire/créer/modifier des blocs en préservant tous les
+champs inconnus, expansion `{{favoris}}` identique à `runBlock`), le registre
+des projets connus, l'exécution en lecture seule et la génération d'INSERT
+(`inserts.rs`). Le serveur `graft-mcp` est en place.
 
 **Phasage proposé :** extraction de `graft-core` → serveur MCP stdio
 (SQLite, lecture seule + édition de blocs) → surveillance de fichier dans l'app
@@ -697,13 +1235,16 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   — l'essentiel de la v0.2 est donc déjà là.
 - **Ergonomie éditeur classique** : sidebar avec schéma live (recherche, arbre
   tables/colonnes, double-clic pour insérer au curseur), actions par bloc
-  (renommer, dupliquer, supprimer), table de résultats numérotée avec copie
-  cellule au double-clic.
-- Autocomplétion alimentée par l'introspection **SQLite** uniquement (Postgres/MySQL
-  en v0.3).
-- Seul **SQLite** est branché (Postgres/MySQL en v0.3) — mais `sqlx` est déjà
-  choisi pour une API unifiée.
-- Les arêtes entre blocs sont dessinables mais n'ont pas encore de sémantique
-  d'exécution (ordre/dépendances) — à définir avec la granularité des blocs.
-- Les `alert`/`prompt` du webview (messages d'erreur, nom d'un favori) ne sont
-  pas encore remplacés par des dialogues natifs ou des modales de l'app.
+  (renommer, dupliquer, replier, supprimer), table de résultats numérotée avec
+  menus cellule/ligne.
+- Fonctions **en avance sur la roadmap** : vues de résultat `json`/`chart`,
+  **groupes** conteneurs (prévus en v1.0), **pages**, **favoris** `{{nom}}`,
+  **palette ⌘K**, pont ORM (INSERT multi-tables).
+- **Course clavier atténuée, pas supprimée** : un accélérateur de menu (⌘↵,
+  ⇧⌥F…) est traité par l'OS avant le webview ; les commandes concernées
+  attendent 60 ms, ce qui couvre la frappe humaine, mais une saisie
+  automatisée plus lente que ce délai pourrait encore exécuter le SQL d'avant
+  la dernière frappe.
+- Les arêtes entre blocs sont dessinables mais **purement visuelles** : aucune
+  sémantique d'exécution (ordre/dépendances) — liée à la question ouverte de la
+  granularité des blocs.

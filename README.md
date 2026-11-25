@@ -4,8 +4,11 @@ SQL database editor with an infinite canvas, for developers and DBAs. SQL blocks
 (query, migration, stored procedure, trigger, view, script) live freely on a
 canvas instead of a linear notebook.
 
-> Status: **v0.1 (proof of concept)** — draggable SQL blocks, local SQLite
-> connection, inline query execution, and JSON notebook save/load.
+> Status: **v0.1 (proof of concept)**, with much of v0.2 already in — draggable
+> and resizable SQL blocks, local SQLite connection, inline query execution,
+> CodeMirror 6 editor with schema autocompletion, table / JSON / chart result
+> views, group containers, pages, reusable `{{favorite}}` blocks, a ⌘K palette
+> (favorites), and paged JSON `.graft` project files.
 
 ## Stack
 
@@ -13,7 +16,10 @@ canvas instead of a linear notebook.
 - **Frontend:** React + TypeScript + Vite
 - **Canvas:** React Flow (`@xyflow/react`)
 - **State:** Zustand
-- **DB drivers:** `sqlx` (SQLite in v0.1; Postgres/MySQL planned for v0.3)
+- **SQL editor:** CodeMirror 6
+- **Charts:** Recharts
+- **DB drivers:** `sqlx` — SQLite, PostgreSQL, MySQL/MariaDB (passwords in the OS keychain)
+- **Tests:** Vitest (frontend) + `cargo test` (backend)
 
 ## Prerequisites
 
@@ -34,26 +40,48 @@ pnpm tauri dev
 pnpm tauri build
 ```
 
+## Test
+
+```bash
+pnpm test                      # Vitest
+pnpm exec tsc --noEmit         # type-check
+(cd src-tauri && cargo test)   # Rust unit tests
+```
+
 ## Using v0.1
 
-1. **Connect SQLite…** — pick (or point at) a `.db`/`.sqlite` file. It's created
-   if missing.
-2. **Add block** — choose a block type; it appears on the canvas.
-3. Edit the SQL and hit **▶ Run** to execute against the connected database.
-   Results (or errors) render inline in the block.
-4. **Save** / **Open** — persist the canvas as a `.graft` JSON file.
+1. **+ New project** on the home screen — name, location, and a connection:
+   a SQLite file (or leave empty to create `<name>.db`), or a PostgreSQL /
+   MySQL server (**Test connection** checks it).
+2. **+ Block** — choose a block type; it appears on the canvas.
+3. Edit the SQL and hit **▶** (or Ctrl/Cmd+Enter) to run it against the
+   database. Results (table / JSON / chart) or errors render inline.
+4. **Save** (Ctrl/Cmd+S) persists the project to its `.graft` JSON file; reopen
+   it from the recent list or **Open file…**.
+
+See [`docs/guide.md`](docs/guide.md) for everything else (groups, pages,
+favorites, INSERT generation, row actions…).
 
 ## Layout
 
 ```
 src/                 React frontend
-  canvas/            React Flow canvas, SQL block node, toolbar, result table
-  store/             Zustand store (nodes, edges, db connection, actions)
+  canvas/            React Flow canvas, block/result/group nodes, result views
+  components/        Toolbar, sidebar, editor, palette, page tabs, modals
+  screens/           Home screen
+  store/             Zustand store (pages, nodes, edges, project, actions)
   types.ts           Shared domain types
 src-tauri/src/
-  db.rs              SQLite execution engine (execute_sql command)
-  notebook.rs        .graft file save/load commands
+  db/                SQLite / Postgres / MySQL execution + introspection
+  db_commands.rs     Tauri commands over db/ (passwords read from the keychain)
+  secrets.rs         OS keychain access
+  notebook.rs        .graft file save/load, project paths
+  dialogs.rs         Native dialogs (run from the backend)
+  scope.rs           Session file-access grants
   lib.rs             Tauri builder + command registration
+src-tauri/crates/
+  graft-core/        Shared engine: db, .graft files, registry, secrets
+  graft-mcp/         MCP server (stdio) for Claude — works without the app
 ```
 
 ## Documentation
