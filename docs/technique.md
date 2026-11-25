@@ -119,6 +119,9 @@ Graft/
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
 │   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
+│   ├── dialogs/
+│   │   ├── appDialogs.ts     # file de dialogues de l'app (showMessage/showError/askConfirm/askText → promesses)
+│   │   └── AppDialogHost.tsx # rendu du dialogue en tête de file (modale aux tokens du DS)
 │   ├── lsp/
 │   │   ├── languageServer.ts # client LSP partagé (@codemirror/lsp-client) sur l'IPC Tauri
 │   │   └── serverDiagnostics.ts # diagnostics publiés par le serveur, par document → offsets éditeur
@@ -302,6 +305,22 @@ clic, supprimable (✕).
 - Le nœud (`SqlBlockNode`) expose aussi **titre éditable** (double-clic),
   **dupliquer** (⧉), **supprimer** (✕) et **▶ Run** — le run est aussi
   déclenché par `Mod-Enter`.
+
+### Dialogues de l'app
+Les `alert` / `confirm` / `prompt` du webview sont **proscrits** (aspect
+navigateur sur macOS/Windows, bloquants). `src/dialogs/appDialogs.ts` expose
+`showMessage` / `showError` / `askConfirm` / `askText`, qui renvoient une
+**promesse** et ajoutent une requête à une petite file Zustand
+(`useDialogStore`) : deux erreurs successives sont donc affichées l'une après
+l'autre. `AppDialogHost` (monté à la racine de `App`, accueil et canvas) rend la
+première requête avec les classes `.modal` / `.btn-accent` / `.btn-danger`
+bâties sur les tokens (`--error`, `--panel`, `--shadow-modal`…) ; Entrée valide
+un champ texte, Échap annule, les touches ne fuient pas vers le canvas.
+Utilisés par : erreurs d'ouverture/sauvegarde/création de projet, import/export,
+génération d'INSERT, formatage, nom d'un favori (`askText`), suppression d'un
+favori (`askConfirm`, bouton danger). La confirmation « modifications non
+sauvegardées » reste un **dialogue natif** (`confirm_dialog`, comme la garde de
+fermeture côté Rust).
 
 ### Formatage SQL
 - `src/formatSql.ts` : `formatSql(sql, dbType)` s'appuie sur **`sql-formatter`**
@@ -818,7 +837,4 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 - Les arêtes entre blocs sont dessinables mais **purement visuelles** : aucune
   sémantique d'exécution (ordre/dépendances) — liée à la question ouverte de la
   granularité des blocs.
-- Les `alert`/`prompt`/`confirm` du webview (messages d'erreur, nom d'un
-  favori, suppression d'un favori) ne sont pas encore remplacés par des
-  fenêtres de l'app.
 - Pas encore de **barre de menus native**.

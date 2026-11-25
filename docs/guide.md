@@ -185,7 +185,9 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 
 ### Blocs favoris & sous-requêtes (`{{nom}}`)
 - **Enregistrer un favori** : clic droit sur un bloc → **« Save as favorite… »**,
-  puis choisis un nom. Les favoris sont listés dans la sidebar et enregistrés
+  puis choisis un nom dans la fenêtre qui s'ouvre (Entrée pour valider, Échap
+  pour annuler). Clic droit sur un favori de la sidebar → confirmation, puis
+  suppression. Les favoris sont listés dans la sidebar et enregistrés
   dans le `.graft`. Le nom est normalisé pour être référençable : seuls lettres,
   chiffres, `_`, `.` et `-` sont gardés, le reste devient `_` (« Query 1 » →
   `Query_1`).
@@ -256,6 +258,4 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 - Seul **SQLite** est supporté (Postgres/MySQL en v0.3).
 - Pas encore de **barre de menus native** (Fichier / Édition / Affichage /
   Fenêtre) : tout passe par la toolbar et les raccourcis.
-- Certains messages (erreurs, nom d'un favori, suppression d'un favori)
-  utilisent encore les boîtes `alert` / `prompt` / `confirm` du navigateur.
 - Les liens entre blocs sont visuels uniquement (pas d'ordre d'exécution).

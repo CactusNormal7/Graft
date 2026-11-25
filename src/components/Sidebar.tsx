@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useGraftStore, type SqlNode } from "../store/useGraftStore";
 import { insertIntoEditor } from "../canvas/editorRegistry";
+import { askConfirm } from "../dialogs/appDialogs";
 import type { BlockType } from "../types";
 
 const BADGE_LETTER: Record<BlockType, string> = {
@@ -165,11 +166,15 @@ export function Sidebar() {
             onDoubleClick={() =>
               focusedBlockId ? insertSnippetRef(s.id) : addBlockFromSnippet(s.id)
             }
-            onContextMenu={(e) => {
+            onContextMenu={async (e) => {
               e.preventDefault();
-              if (window.confirm(`Remove favorite “${s.name}”?`)) {
-                deleteSnippet(s.id);
-              }
+              const isConfirmed = await askConfirm({
+                title: "Remove favorite",
+                message: `Remove “${s.name}”? Blocks referencing {{${s.name}}} will no longer expand it.`,
+                okLabel: "Remove",
+                isDanger: true,
+              });
+              if (isConfirmed) deleteSnippet(s.id);
             }}
           >
             <span className={`badge badge--${s.blockType}`}>

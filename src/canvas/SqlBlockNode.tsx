@@ -7,6 +7,7 @@ import { BlockContextMenu, type MenuAction } from "./BlockContextMenu";
 import { useInnerScroll } from "./useInnerScroll";
 import { ResultFooter, STATUS_LABEL, VIEW_ICON, nextResultView } from "./blockChrome";
 import { SHORTCUTS } from "../commands";
+import { askText } from "../dialogs/appDialogs";
 import { shortcutLabel } from "../shortcuts";
 import { normalizeResultView, type ChartConfig, type ResultView } from "../types";
 
@@ -92,11 +93,13 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
     },
     {
       label: "Save as favorite…",
-      onClick: () => {
-        const name = window.prompt(
-          "Favorite name (used as {{name}} in other queries):",
-          data.title,
-        );
+      onClick: async () => {
+        const name = await askText({
+          title: "Save as favorite",
+          message: "Name used as {{name}} in other queries:",
+          okLabel: "Save",
+          defaultValue: data.title,
+        });
         if (name) saveBlockAsSnippet(id, name);
       },
     },

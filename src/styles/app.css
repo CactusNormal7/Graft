@@ -219,7 +219,8 @@ button {
    Buttons
    --------------------------------------------------------------------------- */
 .btn,
-.btn-accent {
+.btn-accent,
+.btn-danger {
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
   padding: 3px 10px;
@@ -251,8 +252,20 @@ button {
   border-color: var(--accent-hover);
 }
 
+.btn-danger {
+  background: var(--error-dim);
+  border: 1px solid var(--error);
+  color: var(--error);
+}
+
+.btn-danger:hover:not(:disabled) {
+  color: var(--error-hover);
+  border-color: var(--error-hover);
+}
+
 .btn:disabled,
-.btn-accent:disabled {
+.btn-accent:disabled,
+.btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -1879,4 +1892,22 @@ button {
   stroke: var(--accent);
   stroke-dasharray: 4 3;
   opacity: 0.5;
+}
+
+/* In-app dialogs (src/dialogs) — replace the webview's alert/confirm/prompt. */
+.app-dialog--error {
+  border-color: var(--error);
+}
+
+.app-dialog--error .modal__title {
+  color: var(--error-text);
+}
+
+.app-dialog__message {
+  color: var(--text-2);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow: auto;
 }

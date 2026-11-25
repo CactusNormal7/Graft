@@ -29,6 +29,7 @@ vi.mock("../native", () => ({
 }));
 
 const { useGraftStore, hasUnsavedChanges } = await import("./useGraftStore");
+const { useDialogStore } = await import("../dialogs/appDialogs");
 const store = useGraftStore;
 const unsaved = () => hasUnsavedChanges(store.getState());
 
@@ -137,10 +138,14 @@ describe("formatting", () => {
     store.getState().formatBlock(id);
     expect(store.getState().nodes[0].data.sql).toBe("SELECT\n  a\nFROM\n  {{fav}}\nWHERE\n  x = 1");
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     store.getState().updateSql(id, "select (( from");
     store.getState().formatBlock(id);
     expect(store.getState().nodes[0].data.sql).toBe("select (( from");
-    errorSpy.mockRestore();
+    const { queue } = useDialogStore.getState();
+    expect(queue[queue.length - 1]).toMatchObject({
+      kind: "message",
+      tone: "error",
+      title: "Could not format the SQL",
+    });
   });
 });

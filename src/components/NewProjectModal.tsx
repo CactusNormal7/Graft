@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { pickDirectory, pickSqliteFile } from "../native";
 import { useGraftStore } from "../store/useGraftStore";
+import { showError } from "../dialogs/appDialogs";
 import type { DbType } from "../types";
 
 const DB_TYPES: { value: DbType; label: string; enabled: boolean }[] = [
@@ -55,8 +56,7 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
       if (created) onClose();
       else setBusy(false);
     } catch (e) {
-      console.error("createProject:", e);
-      alert(`Could not create project:\n${String(e)}`);
+      void showError("Could not create the project", String(e));
       setBusy(false);
     }
   };

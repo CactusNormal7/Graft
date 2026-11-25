@@ -19,6 +19,7 @@ import {
 } from "../native";
 import { insertIntoEditor, replaceEditorContent } from "../canvas/editorRegistry";
 import { formatSql } from "../formatSql";
+import { showError, showMessage } from "../dialogs/appDialogs";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
@@ -312,12 +313,16 @@ function buildInsertScript(
 ): { title: string; sql: string } | null {
   const result = resultOf(state, blockId);
   if (!result || result.columns.length === 0 || result.rows.length === 0) {
-    alert("Run a query that returns rows first.");
+    void showMessage({
+      title: "No rows to convert",
+      message: "Run a query that returns rows first.",
+      tone: "info",
+    });
     return null;
   }
   const { sql, warnings } = generateInserts(result, state.dbSchema);
   if (!sql.trim()) {
-    alert(`Nothing to generate:\n${warnings.join("\n")}`);
+    void showMessage({ title: "Nothing to generate", message: warnings.join("\n"), tone: "info" });
     return null;
   }
   const node = state.nodes.find((n) => n.id === blockId);
@@ -716,7 +721,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       console.error("Failed to open project:", err);
       // Prune a project file that no longer exists / can't be read.
       get().removeRecent(projectPath);
-      alert(`Could not open project:\n${projectPath}\n\n${String(err)}`);
+      void showError("Could not open the project", `${projectPath}\n\n${String(err)}`);
     }
   },
 
@@ -839,7 +844,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     try {
       await invoke("write_text_file", { path, contents: script.sql });
     } catch (err) {
-      alert(`Could not write the file:\n${String(err)}`);
+      void showError("Could not write the file", String(err));
     }
   },
 
@@ -851,7 +856,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     try {
       contents = await invoke<string>("read_text_file", { path });
     } catch (err) {
-      alert(`Could not read the file:\n${String(err)}`);
+      void showError("Could not read the file", String(err));
       return;
     }
 
@@ -861,12 +866,12 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       try {
         parsed = JSON.parse(contents);
       } catch (err) {
-        alert(`Invalid JSON:\n${String(err)}`);
+        void showError("Invalid JSON", String(err));
         return;
       }
       const { sql, warnings } = jsonToInserts(parsed, get().dbSchema);
       if (!sql.trim()) {
-        alert(`Nothing to import:\n${warnings.join("\n")}`);
+        void showMessage({ title: "Nothing to import", message: warnings.join("\n"), tone: "info" });
         return;
       }
       spawnScriptBlock(get, set, name, warningsHeader(warnings) + sql);
@@ -957,7 +962,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     try {
       formatted = formatSql(node.data.sql, get().dbType);
     } catch (err) {
-      console.error("Could not format the SQL:", err);
+      void showError("Could not format the SQL", String(err));
       return;
     }
     if (formatted === node.data.sql) return;
@@ -1117,7 +1122,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         contents: JSON.stringify(serializeNotebook(get()), null, 2),
       });
     } catch (err) {
-      alert(`Could not save the project:\n${projectPath}\n\n${String(err)}`);
+      void showError("Could not save the project", `${projectPath}\n\n${String(err)}`);
       return;
     }
     markSaved(get, set);

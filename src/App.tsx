@@ -8,6 +8,7 @@ import { StatusBar } from "./components/StatusBar";
 import { PageTabs } from "./components/PageTabs";
 import { CommandPalette } from "./components/CommandPalette";
 import { GraftCanvas } from "./canvas/GraftCanvas";
+import { AppDialogHost } from "./dialogs/AppDialogHost";
 
 function App() {
   const view = useGraftStore((s) => s.view);
@@ -27,7 +28,12 @@ function App() {
   }, [view, saveNotebook]);
 
   if (view === "home") {
-    return <HomeScreen />;
+    return (
+      <>
+        <HomeScreen />
+        <AppDialogHost />
+      </>
+    );
   }
 
   return (
@@ -41,6 +47,7 @@ function App() {
         <PageTabs />
         <StatusBar />
         <CommandPalette />
+        <AppDialogHost />
       </div>
     </ReactFlowProvider>
   );
