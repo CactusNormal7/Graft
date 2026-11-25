@@ -166,10 +166,16 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      nom de table au lieu du placeholder `«table»`.
    - **Redimensionnement** : sélectionne un bloc, les poignées apparaissent
      sur les bords/coins ; taille persistée dans le fichier `.graft`.
-4. **Sidebar — explorateur de schéma** : les tables de la base connectée
-   apparaissent en direct ; clique **▸** pour dérouler les colonnes ; tape
-   dans **Search…** pour filtrer (tables + colonnes) — les tables dont une
+4. **Sidebar — explorateur de schéma** : sections **Tables**, **Views**,
+   **Triggers** et **Procedures & functions** de la base connectée (SQLite,
+   PostgreSQL ou MySQL). Clique **▸** pour dérouler une table : colonnes avec
+   leur type et les badges **PK** (clé primaire), **FK** (clé étrangère),
+   **NN** (non nul), puis ses **index** et **clés étrangères**. Tape dans
+   **Search…** pour filtrer (noms, colonnes, routines) — les tables dont une
    colonne matche se déploient automatiquement. **↻** relance l'introspection.
+   **Clic droit** sur une table/vue : SELECT, insertion du nom, **définition**
+   d'une vue dans un nouveau bloc. **Double-clic** sur un trigger ou une
+   procédure/fonction : sa **définition** s'ouvre dans un nouveau bloc.
    **Double-clic sur un nom de table** crée automatiquement un bloc
    `SELECT * FROM <table> LIMIT 100;` sur le canvas et l'exécute aussitôt.
    **Double-clic sur une colonne** insère `table.colonne` au curseur du bloc

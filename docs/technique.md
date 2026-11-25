@@ -143,7 +143,8 @@ Graft/
 │   │   ├── ConnectionModal.tsx # édition de la connexion du projet (bouton de connexion de la toolbar)
 │   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (commandes + favoris) — état `paletteOpen` dans le store
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
-│   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
+│   │   ├── Sidebar.tsx       # explorateur de schéma (tables, vues, triggers, routines ; colonnes, index, FK) + favoris + blocs
+│   │   ├── schemaTree.ts     # logique pure de l'explorateur : sections, filtre de recherche, libellés
 │   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter, diagnostics
 │   │   ├── sqlDiagnostics.ts # localisation d'une erreur d'exécution dans le SQL (position moteur ou jeton cité)
 │   │   ├── PageTabs.tsx      # barre d'onglets de pages (Excel-like) en bas du canvas
@@ -262,6 +263,31 @@ serveur). Côté store : `dbSchema` = les tables (mis en cache dans le `.graft`,
 index et définitions compris — champs optionnels, les anciens caches restent
 lisibles) ; `schemaObjects = { triggers, routines }` n'est **pas** mis en cache
 (réintrospecté à l'ouverture).
+
+### Explorateur de schéma & autocomplétion par moteur
+- **Sidebar** (`Sidebar.tsx`, logique pure dans `schemaTree.ts`) : sections
+  repliables **Tables**, **Views**, **Triggers**, **Procedures & functions**.
+  Une table/vue se déplie sur ses colonnes (type, badges **PK** / **FK** /
+  **NN**), ses **index** (`PRIMARY KEY (id)`, `UNIQUE (a, b)`…) et ses **clés
+  étrangères** (`col → table.col`). Les objets hors schéma par défaut sont
+  préfixés (`sales.leads`). La recherche filtre noms d'objets, colonnes et
+  table d'un trigger, et déplie la table dont une colonne correspond.
+- Actions : double-clic table/vue → bloc `SELECT * … LIMIT 100` exécuté ;
+  double-clic colonne → `table.colonne` au curseur du bloc actif ; clic droit
+  table/vue → menu (SELECT, insérer le nom, **définition de la vue** dans un
+  nouveau bloc `view`) ; double-clic trigger / routine → sa **définition**
+  dans un nouveau bloc `trigger` / `procedure`.
+- **Autocomplétion** : `SqlEditor` reçoit le moteur de la connexion et choisit
+  le dialecte CodeMirror (`SQLite` / `PostgreSQL` / `MySQL`) pour la
+  coloration, les mots-clés et le quoting des complétions. `store.schema`
+  (dérivé de `dbSchema`) indexe les tables hors schéma par défaut en
+  `schema.table`, que CodeMirror lit comme un espace de noms imbriqué.
+- **SQL généré** (`sqlFormat.ts`) : `setSqlDialect` est synchronisé par le
+  store sur le moteur de la connexion ; `quoteIdent` cite en `` `…` `` pour
+  MySQL (les `"…"` y sont des chaînes sans `ANSI_QUOTES`) et `"…"` ailleurs ;
+  `qualifiedName(name, schema)` ; `sqlLiteral(true)` donne `TRUE` en Postgres
+  (une colonne `boolean` refuse `1`). État de module plutôt que paramètre :
+  il n'y a qu'une connexion active et le SQL est généré à de nombreux endroits.
 
 ### Exécution d'une requête
 1. L'utilisateur clique **▶ Run** sur un bloc → `runBlock(id)` dans le store.
@@ -992,6 +1018,9 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
   **palette ⌘K**, pont ORM (INSERT multi-tables).
 - Une connexion par projet (pas encore de gestionnaire de connexions nommées
   partagées entre projets).
+- Le pont ORM (`orm.ts`) relit la clé du dernier parent inséré via
+  `ORDER BY rowid DESC` : **SQLite seulement** ; sur Postgres/MySQL, renseigner
+  la clé explicitement (la sélectionner dans le résultat).
 - **Course clavier rare** : un accélérateur de menu (⌘↵, ⇧⌥F…) est traité par
   l'OS avant le webview ; une frappe *immédiatement* suivie du raccourci
   (saisie automatisée) peut exécuter le SQL d'avant cette dernière frappe.

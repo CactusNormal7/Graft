@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import {
   sql,
+  MySQL,
+  PostgreSQL,
   SQLite,
   keywordCompletionSource,
   schemaCompletionSource,
+  type SQLDialect,
   type SQLNamespace,
 } from "@codemirror/lang-sql";
 import { EditorView, keymap } from "@codemirror/view";
@@ -29,12 +32,21 @@ import {
 } from "../lsp/serverDiagnostics";
 import { registerEditor, unregisterEditor } from "../canvas/editorRegistry";
 import type { ErrorRange } from "./sqlDiagnostics";
+import type { DbType } from "../types";
+
+const DIALECT_BY_ENGINE: Record<DbType, SQLDialect> = {
+  sqlite: SQLite,
+  postgres: PostgreSQL,
+  mysql: MySQL,
+};
 
 interface SqlEditorProps {
   blockId: string;
   value: string;
   /** table/view → columns, for autocompletion. */
   schema: Record<string, string[]>;
+  /** Engine of the connection: picks the highlighting/completion dialect. */
+  engine: DbType;
   onChange: (value: string) => void;
   onRun: () => void;
   /** Pretty-print the SQL (Shift+Alt+F). */
@@ -66,7 +78,8 @@ function toDiagnostics(
 }
 
 /**
- * SQL editor for a block: CodeMirror 6 with SQLite dialect highlighting,
+ * SQL editor for a block: CodeMirror 6 with the connection's dialect
+ * (SQLite / PostgreSQL / MySQL) for highlighting,
  * schema-aware autocompletion (tables/columns + keywords), line numbers,
  * bracket matching, and Cmd/Ctrl+Enter to run the block.
  */
@@ -74,6 +87,7 @@ export function SqlEditor({
   blockId,
   value,
   schema,
+  engine,
   onChange,
   onRun,
   onFormat,
@@ -139,7 +153,7 @@ export function SqlEditor({
   }, [error, applyDiagnostics]);
 
   const extensions = useMemo(() => {
-    const dialect = SQLite;
+    const dialect = DIALECT_BY_ENGINE[engine];
     return [
       sql({
         dialect,
@@ -262,7 +276,7 @@ export function SqlEditor({
         { dark: true },
       ),
     ];
-  }, [schema, languageServer, documentUri]);
+  }, [schema, engine, languageServer, documentUri]);
 
   // Keep the module-level registry (used by the sidebar and the command
   // palette to insert into the focused block) free of destroyed views.

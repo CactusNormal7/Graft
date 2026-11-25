@@ -29,6 +29,7 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
   const copyInsertsAction = useGraftStore((s) => s.copyInserts);
   const exportInsertsAction = useGraftStore((s) => s.exportInserts);
   const schema = useGraftStore((s) => s.schema);
+  const engine = useGraftStore((s) => s.connection?.engine ?? "sqlite");
 
   // INSERT generation needs rows — either embedded or routed to a linked block.
   const hasResultRows =
@@ -267,6 +268,7 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
             blockId={id}
             value={data.sql}
             schema={schema}
+            engine={engine}
             onChange={(v) => updateSql(id, v)}
             onRun={() => runBlock(id)}
             onFormat={() => formatBlock(id)}

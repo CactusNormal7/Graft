@@ -24,7 +24,7 @@ import { showError, showMessage } from "../dialogs/appDialogs";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
-import { quoteIdent } from "../sqlFormat";
+import { qualifiedName, setSqlDialect } from "../sqlFormat";
 import type {
   BlockType,
   ChartConfig,
@@ -250,7 +250,7 @@ interface GraftState {
   toggleCollapse: (id: string) => void;
   /** Create a query block pre-filled with `SELECT * FROM <table> LIMIT 100`
    *  and run it immediately (double-click a table in the sidebar). */
-  addSelectBlock: (table: string) => void;
+  addSelectBlock: (table: string, schema?: string) => void;
 
   // --- Group containers ---
   addGroup: () => void;
@@ -299,11 +299,14 @@ function patchNode(
   );
 }
 
-/** Flatten the rich schema into the `table → column names` map CodeMirror and
- *  the sidebar consume. */
+/** Flatten the rich schema into the `table → column names` map CodeMirror
+ *  completes from. Tables outside the default schema are keyed
+ *  `schema.table`, which CodeMirror reads as a nested namespace. */
 function flattenSchema(dbSchema: DbSchema): Record<string, string[]> {
   const out: Record<string, string[]> = {};
-  for (const t of dbSchema) out[t.name] = t.columns.map((c) => c.name);
+  for (const t of dbSchema) {
+    out[t.schema ? `${t.schema}.${t.name}` : t.name] = t.columns.map((c) => c.name);
+  }
   return out;
 }
 
@@ -783,11 +786,11 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     set({ nodes: [...nodes, node] });
   },
 
-  addSelectBlock: (table) => {
+  addSelectBlock: (table, schema) => {
     const id = spawnSqlBlock(get, set, {
-      title: `Select ${table}`,
+      title: `Select ${schema ? `${schema}.` : ""}${table}`,
       blockType: "query",
-      sql: `SELECT * FROM ${quoteIdent(table)} LIMIT 100;`,
+      sql: `SELECT * FROM ${qualifiedName(table, schema)} LIMIT 100;`,
     });
     // Auto-run so double-clicking a table immediately shows its rows.
     void get().runBlock(id);
@@ -1307,6 +1310,12 @@ useGraftStore.subscribe((state, prev) => {
     const dirty = hasUnsavedChanges(current);
     if (dirty !== current.dirty) useGraftStore.setState({ dirty });
   }, DIRTY_CHECK_DELAY_MS);
+});
+
+// Generated SQL (row actions, INSERTs…) quotes identifiers for the engine of
+// the open connection.
+useGraftStore.subscribe((state, prev) => {
+  if (state.connection !== prev.connection) setSqlDialect(state.connection?.engine ?? "sqlite");
 });
 
 useGraftStore.subscribe((state, prev) => {
