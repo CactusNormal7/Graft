@@ -144,6 +144,8 @@ export interface ForeignKey {
 /** A table or view with the metadata the relation-aware features need. */
 export interface TableInfo {
   name: string;
+  /** Namespace, when not the engine's default one (Postgres `public`). */
+  schema?: string;
   kind: string;
   columns: ColumnInfo[];
   foreign_keys: ForeignKey[];
@@ -156,6 +158,11 @@ export interface TableInfo {
  */
 export type DbSchema = TableInfo[];
 
+/** What `introspect_schema` returns. */
+export interface SchemaSnapshot {
+  tables: TableInfo[];
+}
+
 /** A saved "favorite" block: reusable SQL referenced as `{{name}}`. */
 export interface Snippet {
   id: string;
@@ -165,8 +172,28 @@ export interface Snippet {
   blockType: BlockType;
 }
 
-/** Database engine for a connection. Only SQLite is functional in v0.1. */
+/** Database engine of a connection. */
 export type DbType = "sqlite" | "postgres" | "mysql";
+
+/** TLS policy of a server connection (mirrors the Rust `SslMode`). */
+export type SslMode = "disable" | "prefer" | "require" | "verify-full";
+
+/**
+ * What a project connects to (mirrors the Rust `ConnectionConfig`). Saved in
+ * the `.graft` file — hence no password: it lives in the OS keychain, under
+ * the connection `id`.
+ */
+export interface ConnectionConfig {
+  id: string;
+  engine: DbType;
+  /** SQLite database file. */
+  path?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  sslMode?: SslMode;
+}
 
 /** A serialized canvas node (any kind). */
 export interface NotebookNode {
@@ -198,12 +225,16 @@ export interface NotebookPage {
 export interface NotebookFile {
   /** 1 → original. 2 → linked result blocks + `type` field.
    *  3 → group (container) nodes + `parentId`. 4 → multiple pages.
-   *  5 → cached db schema + snippets.
+   *  5 → cached db schema + snippets. 6 → `connection` (Postgres/MySQL).
    *  Loader tolerates all versions (v1–v3 = a single implicit page). */
-  version: 1 | 2 | 3 | 4 | 5;
+  version: 1 | 2 | 3 | 4 | 5 | 6;
   name: string;
+  /** Engine, kept in v6+ for older readers (same as `connection.engine`). */
   dbType: DbType;
+  /** SQLite file, kept in v6+ for older readers; null for server engines. */
   dbPath: string | null;
+  /** v6+: the connection (no password). Absent → SQLite at `dbPath`. */
+  connection?: ConnectionConfig;
   /** v5+: cached database structure, refreshed on DDL. */
   dbSchema?: DbSchema;
   /** v5+: saved favorite blocks, referenced as `{{name}}`. */

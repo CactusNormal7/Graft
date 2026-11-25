@@ -97,7 +97,8 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
   tables/colonnes, Ctrl/Cmd+Entrée), erreurs inline. 🔶 *en cours* (l'éditeur,
   la coloration et l'autocomplétion schéma SQLite sont en place).
 - **v0.3** — explorateur de schéma, connexions visuelles blocs ↔ tables,
-  support Postgres + MySQL.
+  support Postgres + MySQL. 🔶 *en cours* (Postgres + MySQL branchés, mots de
+  passe dans le trousseau de l'OS).
 - **v1.0** — UX canvas peaufinée (zoom, groupes, zones nommées), types de blocs
   différenciés, export de notebook, distribution desktop Tauri. *(Les groupes
   conteneurs et les pages existent déjà.)*

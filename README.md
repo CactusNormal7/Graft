@@ -18,7 +18,7 @@ canvas instead of a linear notebook.
 - **State:** Zustand
 - **SQL editor:** CodeMirror 6
 - **Charts:** Recharts
-- **DB drivers:** `sqlx` (SQLite in v0.1; Postgres/MySQL planned for v0.3)
+- **DB drivers:** `sqlx` — SQLite, PostgreSQL, MySQL/MariaDB (passwords in the OS keychain)
 - **Tests:** Vitest (frontend) + `cargo test` (backend)
 
 ## Prerequisites
@@ -50,8 +50,9 @@ pnpm exec tsc --noEmit         # type-check
 
 ## Using v0.1
 
-1. **+ New project** on the home screen — name, location, and a SQLite file
-   (an existing `.db`/`.sqlite`, or leave empty to create `<name>.db`).
+1. **+ New project** on the home screen — name, location, and a connection:
+   a SQLite file (or leave empty to create `<name>.db`), or a PostgreSQL /
+   MySQL server (**Test connection** checks it).
 2. **+ Block** — choose a block type; it appears on the canvas.
 3. Edit the SQL and hit **▶** (or Ctrl/Cmd+Enter) to run it against the
    database. Results (table / JSON / chart) or errors render inline.
@@ -71,7 +72,9 @@ src/                 React frontend
   store/             Zustand store (pages, nodes, edges, project, actions)
   types.ts           Shared domain types
 src-tauri/src/
-  db.rs              SQLite execution + schema introspection
+  db/                SQLite / Postgres / MySQL execution + introspection
+  db_commands.rs     Tauri commands over db/ (passwords read from the keychain)
+  secrets.rs         OS keychain access
   notebook.rs        .graft file save/load, project paths
   dialogs.rs         Native dialogs (run from the backend)
   scope.rs           Session file-access grants

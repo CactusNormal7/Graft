@@ -1,58 +1,15 @@
-//! SQLite execution engine for Graft v0.1.
-//!
-//! `execute_sql` opens (creating if missing) a SQLite database at the given
-//! path, runs the SQL, and returns a structured result the frontend can render
-//! in a table. `introspect_schema` returns the tables/views with their columns
-//! and foreign keys.
+//! SQLite engine: one connection per call (opening a local file is cheap,
+//! and nothing stays locked between runs), statement-at-a-time execution with
+//! typed cells, exact error positions, and introspection through pragmas.
 
 use std::time::Instant;
 
 use futures_util::TryStreamExt;
-use serde::Serialize;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection, SqliteRow};
 use sqlx::{Column, ConnectOptions, Connection, Executor, Row, Statement};
 
-/// Default cap on how many rows are converted to JSON and shipped to the
-/// frontend. The UI paginates anyway, and serializing a very large result over
-/// the Tauri IPC bridge is what makes a big query feel slow.
-const DEFAULT_MAX_ROWS: usize = 5_000;
-
-/// Result of running a single SQL statement.
-#[derive(Serialize)]
-pub struct QueryResult {
-    /// Column names (empty for statements that return no rows).
-    pub columns: Vec<String>,
-    /// Row values, each cell serialized to a JSON value. Capped at `max_rows`.
-    pub rows: Vec<Vec<serde_json::Value>>,
-    /// Rows affected, for INSERT/UPDATE/DELETE/DDL statements.
-    pub rows_affected: u64,
-    /// Wall-clock execution time in milliseconds.
-    pub elapsed_ms: u64,
-    /// Total rows the query produced — may exceed `rows.len()`.
-    pub total_rows: usize,
-    /// True when `rows` was capped and isn't the whole result set.
-    pub truncated: bool,
-}
-
-/// An execution error, structured so the editor can underline it.
-#[derive(Serialize, Debug)]
-pub struct SqlError {
-    /// Human-readable message, as reported by the engine.
-    pub message: String,
-    /// Offset of the error in the executed SQL, in UTF-16 code units (a
-    /// JavaScript string index), when the engine reports one. Otherwise the
-    /// frontend locates the token quoted in the message.
-    pub position: Option<usize>,
-}
-
-impl From<sqlx::Error> for SqlError {
-    fn from(err: sqlx::Error) -> Self {
-        SqlError {
-            message: err.to_string(),
-            position: None,
-        }
-    }
-}
+use super::schema::{ColumnInfo, ForeignKey, SchemaSnapshot, TableInfo};
+use super::{elapsed_ms, returns_rows, utf16_offset, QueryResult, SqlError};
 
 /// Open a single connection to the database file. A pool would be overkill:
 /// each command runs one unit of work and closes the connection afterwards.
@@ -90,39 +47,6 @@ fn cell_to_json(row: &SqliteRow, idx: usize) -> serde_json::Value {
     Value::Null
 }
 
-/// Skip leading whitespace and SQL comments (`-- …` and `/* … */`) so the
-/// statement keyword can be inspected.
-fn strip_leading_comments(sql: &str) -> &str {
-    let mut rest = sql.trim_start();
-    loop {
-        if let Some(after) = rest.strip_prefix("--") {
-            rest = after.find('\n').map_or("", |i| &after[i + 1..]).trim_start();
-        } else if let Some(after) = rest.strip_prefix("/*") {
-            rest = after.find("*/").map_or("", |i| &after[i + 2..]).trim_start();
-        } else {
-            return rest;
-        }
-    }
-}
-
-/// True when `word` appears in `haystack` as a standalone keyword (not as part
-/// of a longer identifier). `haystack` must already be lowercase.
-fn contains_keyword(haystack: &str, word: &str) -> bool {
-    let is_ident = |c: char| c.is_ascii_alphanumeric() || c == '_';
-    haystack.match_indices(word).any(|(i, _)| {
-        let before = haystack[..i].chars().next_back();
-        let after = haystack[i + word.len()..].chars().next();
-        !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
-    })
-}
-
-/// True for statements that yield a result set we should fetch and display.
-fn returns_rows(sql: &str) -> bool {
-    const ROW_KEYWORDS: [&str; 5] = ["select", "with", "pragma", "explain", "values"];
-    let head = strip_leading_comments(sql).to_ascii_lowercase();
-    ROW_KEYWORDS.iter().any(|k| head.starts_with(k)) || contains_keyword(&head, "returning")
-}
-
 /// Fetch a result set, converting at most `max_rows` rows to JSON. The rest of
 /// the stream is only counted — never materialized — so a huge result costs
 /// neither memory nor IPC payload.
@@ -157,11 +81,6 @@ async fn fetch_rows(
     }
 
     Ok((columns, rows, total_rows))
-}
-
-/// `byte_offset` (into `sql`) as a JavaScript string index.
-fn utf16_offset(sql: &str, byte_offset: usize) -> usize {
-    sql[..byte_offset].encode_utf16().count()
 }
 
 /// Re-prepare the statements of `sql` one by one (preparing executes
@@ -216,7 +135,8 @@ async fn sqlite_error_position(
     unsafe { locate_by_preparing(handle.as_raw_handle().as_ptr(), sql, message) }
 }
 
-async fn run(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, SqlError> {
+/// Run `sql` against the SQLite file at `db_path` (created if missing).
+pub async fn run(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, SqlError> {
     let mut conn = connect(db_path).await?;
     match execute(&mut conn, sql, max_rows).await {
         Ok(result) => {
@@ -262,54 +182,6 @@ async fn execute(
         }
     };
     Ok(result)
-}
-
-fn elapsed_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
-/// Execute SQL against the SQLite database at `db_path`.
-/// `max_rows` caps how many rows are returned (defaults to `DEFAULT_MAX_ROWS`).
-/// Errors are returned as a `SqlError` (message + optional position).
-#[tauri::command]
-pub async fn execute_sql(
-    db_path: String,
-    sql: String,
-    max_rows: Option<usize>,
-) -> Result<QueryResult, SqlError> {
-    let max = max_rows.unwrap_or(DEFAULT_MAX_ROWS).max(1);
-    run(&db_path, &sql, max).await
-}
-
-/// One column of a table/view.
-#[derive(Serialize)]
-pub struct ColumnInfo {
-    pub name: String,
-    /// Declared SQLite type (may be empty for views / untyped columns).
-    pub data_type: String,
-    pub notnull: bool,
-    /// True when the column is part of the primary key.
-    pub pk: bool,
-}
-
-/// A foreign key: `column` in this table references `to_table(to_column)`.
-#[derive(Serialize)]
-pub struct ForeignKey {
-    pub column: String,
-    pub to_table: String,
-    /// Empty when the FK implicitly targets the parent's primary key.
-    pub to_column: String,
-}
-
-/// A table or view, with everything the ORM/nested features need to rebuild
-/// relations without re-deriving them from query results.
-#[derive(Serialize)]
-pub struct TableInfo {
-    pub name: String,
-    /// "table" or "view".
-    pub kind: String,
-    pub columns: Vec<ColumnInfo>,
-    pub foreign_keys: Vec<ForeignKey>,
 }
 
 async fn table_columns(
@@ -358,7 +230,8 @@ async fn table_foreign_keys(
         .collect())
 }
 
-async fn introspect(db_path: &str) -> Result<Vec<TableInfo>, sqlx::Error> {
+/// Tables and views of the SQLite file at `db_path`.
+pub async fn introspect(db_path: &str) -> Result<SchemaSnapshot, sqlx::Error> {
     let mut conn = connect(db_path).await?;
 
     let entries: Vec<(String, String)> = sqlx::query_as(
@@ -375,6 +248,7 @@ async fn introspect(db_path: &str) -> Result<Vec<TableInfo>, sqlx::Error> {
         let foreign_keys = table_foreign_keys(&mut conn, &name).await?;
         schema.push(TableInfo {
             name,
+            schema: None,
             kind,
             columns,
             foreign_keys,
@@ -382,33 +256,12 @@ async fn introspect(db_path: &str) -> Result<Vec<TableInfo>, sqlx::Error> {
     }
 
     conn.close().await?;
-    Ok(schema)
-}
-
-/// Introspect the SQLite database at `db_path`: tables/views with their
-/// columns (type, notnull, pk) and foreign keys. Powers editor autocompletion
-/// and the relation-aware (ORM) features; cached in the project file.
-#[tauri::command]
-pub async fn introspect_schema(db_path: String) -> Result<Vec<TableInfo>, String> {
-    introspect(&db_path).await.map_err(|e| e.to_string())
+    Ok(SchemaSnapshot { tables: schema })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn detects_row_returning_statements() {
-        assert!(returns_rows("SELECT 1"));
-        assert!(returns_rows("  with x as (select 1) select * from x"));
-        assert!(returns_rows("-- comment\nSELECT 1"));
-        assert!(returns_rows("/* block */ -- line\n  select 1"));
-        assert!(returns_rows("VALUES (1), (2)"));
-        assert!(returns_rows("INSERT INTO t (a) VALUES (1) RETURNING id"));
-        assert!(!returns_rows("INSERT INTO returning_log (a) VALUES (1)"));
-        assert!(!returns_rows("-- migration\nCREATE TABLE t (id INTEGER)"));
-        assert!(!returns_rows("UPDATE t SET a = 1"));
-    }
 
     #[tokio::test]
     async fn executes_and_caps_rows() {
@@ -435,7 +288,7 @@ mod tests {
         assert_eq!(empty.columns, vec!["id", "name"]);
         assert!(empty.rows.is_empty());
 
-        let schema = introspect(&db).await.unwrap();
+        let schema = introspect(&db).await.unwrap().tables;
         assert_eq!(schema.len(), 1);
         assert_eq!(schema[0].columns.len(), 2);
         assert!(schema[0].columns[0].pk);
@@ -443,17 +296,12 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    #[test]
-    fn converts_byte_offsets_to_javascript_indices() {
-        assert_eq!(utf16_offset("é😀x", "é😀".len()), 3);
-    }
-
     #[tokio::test]
     async fn reports_syntax_errors_with_the_offending_token() {
         let dir = std::env::temp_dir().join(format!("graft-err-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let db = dir.join("e.db");
-        let err = execute_sql(db.to_string_lossy().into_owned(), "SELECT * FORM t".into(), None)
+        let err = run(&db.to_string_lossy(), "SELECT * FORM t", 10)
             .await
             .err()
             .expect("syntax error");
@@ -463,7 +311,7 @@ mod tests {
         // Second statement, and the token also appears earlier: the engine's
         // offset (relative to the statement) picks the right occurrence.
         let script = "SELECT 'é' AS id;\nSELECT id, x FROM t wher id = 1";
-        let err = execute_sql(db.to_string_lossy().into_owned(), script.into(), None)
+        let err = run(&db.to_string_lossy(), script, 10)
             .await
             .err()
             .expect("syntax error");
@@ -473,7 +321,7 @@ mod tests {
         // An error that depends on an earlier statement having run: preparing
         // alone fails differently, so no position is claimed.
         let script = "CREATE TABLE fresh (a INT); SELECT b FROM fresh";
-        let err = execute_sql(db.to_string_lossy().into_owned(), script.into(), None)
+        let err = run(&db.to_string_lossy(), script, 10)
             .await
             .err()
             .expect("unknown column");

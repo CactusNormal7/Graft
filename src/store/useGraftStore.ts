@@ -19,6 +19,7 @@ import {
 } from "../native";
 import { insertIntoEditor, replaceEditorContent } from "../canvas/editorRegistry";
 import { formatSql } from "../formatSql";
+import { connectionFromFile } from "../connection";
 import { showError, showMessage } from "../dialogs/appDialogs";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
@@ -27,8 +28,8 @@ import { quoteIdent } from "../sqlFormat";
 import type {
   BlockType,
   ChartConfig,
+  ConnectionConfig,
   DbSchema,
-  DbType,
   GroupBlockData,
   NotebookEdge,
   NotebookFile,
@@ -36,6 +37,7 @@ import type {
   QueryResult,
   RecentProject,
   ResultBlockData,
+  SchemaSnapshot,
   ResultView,
   Snippet,
   SqlBlockData,
@@ -155,9 +157,10 @@ interface GraftState {
   projectName: string | null;
   /** Absolute path to the current `.graft` file, or null if unsaved. */
   projectPath: string | null;
-  dbType: DbType;
-  /** Path to the connected database file (SQLite), or null if none. */
-  dbPath: string | null;
+  /** What the project connects to; null when it has no database. */
+  connection: ConnectionConfig | null;
+  /** Why the last introspection failed (unreachable server, bad password…). */
+  schemaError: string | null;
 
   /** Introspected schema: table/view name → column names (for autocompletion).
    *  Derived from `dbSchema` — kept flat because that's what CodeMirror and the
@@ -196,12 +199,17 @@ interface GraftState {
   /** Return to the canvas of the project still loaded (from the home screen). */
   resumeProject: () => void;
   /** Resolves to false when the user chose to keep their unsaved changes. */
+  /** `connection.path` empty for SQLite → `<dir>/<name>.db`. `password` (server
+   *  engines) goes to the OS keychain, never to the project file. */
   createProject: (
     name: string,
     dir: string,
-    dbType: DbType,
-    dbPathOverride?: string | null,
+    connection: ConnectionConfig,
+    password?: string,
   ) => Promise<boolean>;
+  /** Replace the project's connection (connection dialog); `password` set →
+   *  stored in the keychain. Refreshes the schema. */
+  updateConnection: (connection: ConnectionConfig, password?: string) => Promise<void>;
   openProjectByPath: (projectPath: string) => Promise<void>;
   openProjectFromDialog: () => Promise<void>;
   removeRecent: (projectPath: string) => void;
@@ -494,10 +502,11 @@ function pagesFromFile(file: NotebookFile): Page[] {
 function serializeNotebook(state: GraftState): NotebookFile {
   const pages = commitActivePage(state);
   return {
-    version: 5,
+    version: 6,
     name: state.projectName ?? "untitled",
-    dbType: state.dbType,
-    dbPath: state.dbPath,
+    dbType: state.connection?.engine ?? "sqlite",
+    dbPath: state.connection?.engine === "sqlite" ? (state.connection.path ?? null) : null,
+    connection: state.connection ?? undefined,
     // Cached so relations are known at open without re-introspecting.
     dbSchema: state.dbSchema,
     snippets: state.snippets,
@@ -556,8 +565,8 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   activePageId: INITIAL_PAGE_ID,
   projectName: null,
   projectPath: null,
-  dbType: "sqlite",
-  dbPath: null,
+  connection: null,
+  schemaError: null,
   schema: {},
   dbSchema: [],
   snippets: [],
@@ -642,20 +651,18 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     set({ recentProjects: next });
   },
 
-  createProject: async (name, dir, dbType, dbPathOverride) => {
+  createProject: async (name, dir, connectionDraft, password) => {
     if (!(await confirmDiscard(get()))) return false;
     const paths = await invoke<{ projectPath: string; dbPath: string }>(
       "create_project_paths",
       { dir, name },
     );
-    // SQLite: use the chosen existing/explicit file if given, else create
-    // <name>.db next to the project. Other engines have no file path (v0.3).
-    const dbPath =
-      dbType === "sqlite"
-        ? dbPathOverride && dbPathOverride.trim()
-          ? dbPathOverride.trim()
-          : paths.dbPath
-        : null;
+    // SQLite without an explicit file: create <name>.db next to the project.
+    const connection: ConnectionConfig =
+      connectionDraft.engine === "sqlite" && !connectionDraft.path?.trim()
+        ? { ...connectionDraft, path: paths.dbPath }
+        : connectionDraft;
+    if (password) await storePassword(connection.id, password);
 
     const pageId = nextPageId();
     set({
@@ -666,10 +673,10 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       activePageId: pageId,
       projectName: name,
       projectPath: paths.projectPath,
-      dbType,
-      dbPath,
+      connection,
       dbSchema: [],
       schema: {},
+      schemaError: null,
       snippets: [],
       focusedBlockId: null,
     });
@@ -684,13 +691,14 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       contents: JSON.stringify(serializeNotebook(get()), null, 2),
     });
     markSaved(get, set);
-    touchRecent(get, set, {
-      name,
-      projectPath: paths.projectPath,
-      dbType,
-      dbPath,
-    });
+    touchRecent(get, set, recentEntry(name, paths.projectPath, connection));
     return true;
+  },
+
+  updateConnection: async (connection, password) => {
+    if (password) await storePassword(connection.id, password);
+    set({ connection, schemaError: null });
+    await get().refreshSchema();
   },
 
   openProjectByPath: async (projectPath) => {
@@ -701,14 +709,13 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       const pages = pagesFromFile(file);
       const active = pages[0];
       const name = file.name ?? "untitled";
-      const dbType = file.dbType ?? "sqlite";
-      const dbPath = file.dbPath ?? null;
+      const connection = connectionFromFile(file);
       set({
         view: "canvas",
         projectName: name,
         projectPath,
-        dbType,
-        dbPath,
+        connection,
+        schemaError: null,
         pages,
         activePageId: active.id,
         nodes: active.nodes,
@@ -721,7 +728,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
         focusedBlockId: null,
       });
       markSaved(get, set);
-      touchRecent(get, set, { name, projectPath, dbType, dbPath });
+      touchRecent(get, set, recentEntry(name, projectPath, connection));
       void get().refreshSchema();
     } catch (err) {
       console.error("Failed to open project:", err);
@@ -737,16 +744,19 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   },
 
   refreshSchema: async () => {
-    const { dbPath } = get();
-    if (!dbPath) {
-      set({ schema: {}, dbSchema: [] });
+    const { connection } = get();
+    if (!connection) {
+      set({ schema: {}, dbSchema: [], schemaError: null });
       return;
     }
     try {
-      const dbSchema = await invoke<DbSchema>("introspect_schema", { dbPath });
-      set({ dbSchema, schema: flattenSchema(dbSchema) });
+      const snapshot = await invoke<SchemaSnapshot>("introspect_schema", { connection });
+      // The connection may have changed while introspecting: drop stale data.
+      if (get().connection !== connection) return;
+      set({ dbSchema: snapshot.tables, schema: flattenSchema(snapshot.tables), schemaError: null });
     } catch (err) {
-      console.error("introspect_schema:", err);
+      // Keep the cached structure: it still helps while the server is down.
+      if (get().connection === connection) set({ schemaError: errorMessage(err) });
     }
   },
 
@@ -966,7 +976,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     if (!node || !isSqlNode(node)) return;
     let formatted: string;
     try {
-      formatted = formatSql(node.data.sql, get().dbType);
+      formatted = formatSql(node.data.sql, get().connection?.engine ?? "sqlite");
     } catch (err) {
       void showError("Could not format the SQL", String(err));
       return;
@@ -1067,14 +1077,14 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   setFocusedBlock: (id) => set({ focusedBlockId: id }),
 
   runBlock: async (id) => {
-    const { dbPath, nodes } = get();
+    const { connection, nodes } = get();
     const node = nodes.find((n) => n.id === id);
     if (!node || !isSqlNode(node)) return;
     // Already running: a second trigger (menu accelerator + editor keymap
     // firing together, double click) must not execute the SQL twice.
     if (node.data.status === "running") return;
 
-    if (!dbPath) {
+    if (!connection) {
       set({
         nodes: patchNode(nodes, id, {
           status: "error",
@@ -1099,7 +1109,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     const sql = expandSnippets(node.data.sql, get().snippets);
     try {
       const result = await invoke<QueryResult>("execute_sql", {
-        dbPath,
+        connection,
         sql,
         maxRows: MAX_FETCH_ROWS,
       });
@@ -1135,12 +1145,7 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       return;
     }
     markSaved(get, set);
-    touchRecent(get, set, {
-      name: get().projectName ?? "untitled",
-      projectPath,
-      dbType: get().dbType,
-      dbPath: get().dbPath,
-    });
+    touchRecent(get, set, recentEntry(get().projectName ?? "untitled", projectPath, get().connection));
   },
 }));
 
@@ -1233,6 +1238,24 @@ function writeRunResult(
     }
   }
   set({ nodes });
+}
+
+/** Store a connection password in the OS keychain (via the backend). */
+function storePassword(connectionId: string, password: string): Promise<void> {
+  return invoke("set_connection_password", { connectionId, password });
+}
+
+function recentEntry(
+  name: string,
+  projectPath: string,
+  connection: ConnectionConfig | null,
+): Omit<RecentProject, "modifiedAt"> {
+  return {
+    name,
+    projectPath,
+    dbType: connection?.engine ?? "sqlite",
+    dbPath: connection?.engine === "sqlite" ? (connection.path ?? null) : null,
+  };
 }
 
 /** Insert/update a recent-project entry, move it to the top, and persist. */

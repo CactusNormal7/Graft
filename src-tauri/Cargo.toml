@@ -24,10 +24,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
 futures-util = { version = "0.3", default-features = false }
+# rustls (not native-tls) so Windows/macOS builds need no OpenSSL; native
+# roots so corporate CAs installed in the OS trust store are honoured.
 sqlx = { version = "0.8", default-features = false, features = [
   "runtime-tokio",
+  "tls-rustls-ring-native-roots",
   "sqlite",
+  "postgres",
+  "mysql",
 ] }
+# OS credential store (macOS Keychain, Windows Credential Manager) for
+# connection passwords, which never go into the .graft file.
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 tokio = { version = "1", features = ["full"] }
 # Same version as sqlx-sqlite's (Cargo unifies them): only used to read
 # `sqlite3_error_offset`, which sqlx does not expose, to underline errors.

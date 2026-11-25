@@ -1911,3 +1911,58 @@ button {
   max-height: 40vh;
   overflow: auto;
 }
+
+/* Connection form (src/components/ConnectionForm.tsx) */
+.connection-form__row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+
+.connection-form__grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.connection-form__port {
+  width: 88px;
+}
+
+.connection-form__test {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 24px;
+  font-size: var(--text-xs);
+}
+
+.connection-form__ok {
+  color: var(--success);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-form__failed {
+  color: var(--error-text);
+  overflow-wrap: anywhere;
+}
+
+.toolbar__connection {
+  color: var(--success);
+  border-color: var(--success-dim);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toolbar__connection.is-failing {
+  color: var(--error);
+  border-color: var(--error-dim);
+}
+
+.sidebar__error {
+  color: var(--error-text);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}

@@ -33,7 +33,8 @@ export function Sidebar() {
     [allNodes],
   );
   const schema = useGraftStore((s) => s.schema);
-  const dbPath = useGraftStore((s) => s.dbPath);
+  const hasConnection = useGraftStore((s) => s.connection !== null);
+  const schemaError = useGraftStore((s) => s.schemaError);
   const refreshSchema = useGraftStore((s) => s.refreshSchema);
   const focusedBlockId = useGraftStore((s) => s.focusedBlockId);
   const addSelectBlock = useGraftStore((s) => s.addSelectBlock);
@@ -79,7 +80,7 @@ export function Sidebar() {
           className="btn sidebar__refresh"
           title="Refresh schema"
           onClick={() => void refreshSchema()}
-          disabled={!dbPath}
+          disabled={!hasConnection}
         >
           ↻
         </button>
@@ -92,10 +93,11 @@ export function Sidebar() {
       />
 
       <div className="sidebar__scroll">
-        {!dbPath && (
+        {!hasConnection && (
           <span className="text-muted">No database connected</span>
         )}
-        {dbPath && tables.length === 0 && (
+        {schemaError && <span className="sidebar__error">{schemaError}</span>}
+        {hasConnection && !schemaError && tables.length === 0 && (
           <span className="text-muted">Empty schema — create a table.</span>
         )}
         {filtered.map((table) => {
@@ -141,7 +143,7 @@ export function Sidebar() {
             </div>
           );
         })}
-        {dbPath && filtered.length === 0 && tables.length > 0 && (
+        {hasConnection && filtered.length === 0 && tables.length > 0 && (
           <span className="text-muted">No match for “{query}”.</span>
         )}
       </div>

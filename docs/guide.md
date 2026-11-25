@@ -56,10 +56,19 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 - **+ New project** → ouvre une **modale** :
   - **Nom** du projet,
   - **Emplacement** (par défaut `~/Documents/Graft`, modifiable + *Browse*),
-  - **Type de base** (SQLite ; PostgreSQL/MySQL arrivent en v0.3).
-  - **Database file (SQLite)** : *Browse* pour pointer un fichier `.db`/`.sqlite`
-    **existant**, ou laisse vide pour créer un nouveau
-    `<nom>.db` à côté du projet.
+  - **Moteur** : **SQLite**, **PostgreSQL** ou **MySQL** (MariaDB compris).
+    - SQLite : **Database file** → *Browse* pour pointer un fichier
+      `.db`/`.sqlite` **existant**, ou laisse vide pour créer un nouveau
+      `<nom>.db` à côté du projet.
+    - PostgreSQL / MySQL : **hôte**, **port** (5432 / 3306 par défaut),
+      **base** (obligatoire pour MySQL ; pour Postgres, par défaut celle du
+      nom d'utilisateur), **utilisateur**, **mot de passe** et **SSL**
+      (*Disable*, *Prefer* — défaut, *Require*, *Verify* = vérification du
+      certificat et du nom d'hôte). Le mot de passe est rangé dans le
+      **trousseau du système** (Trousseau macOS, Gestionnaire d'identification
+      Windows), **jamais** dans le fichier `.graft`.
+  - **Test connection** vérifie la connexion et affiche la version du serveur
+    (ou l'erreur) sans rien enregistrer.
   À la validation, le projet est **créé et sauvegardé immédiatement**
   (`<emplacement>/<nom>.graft`), puis tu entres dans le canvas. Si un projet du
   même nom existe déjà à cet emplacement, la création est **refusée** (il n'est
@@ -70,7 +79,13 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
   de la liste.
 - **Open file…** → ouvre un `.graft` existant où qu'il soit.
 
-> Seul **SQLite** est fonctionnel en v0.1 (multi-moteur en v0.3).
+> **Changer de connexion** : dans un projet ouvert, clique sur le bouton de
+> connexion de la toolbar (à droite du nom du projet). Il passe au **rouge**
+> si la base est injoignable (le message s'affiche dans la sidebar). Laisse le
+> mot de passe vide pour garder celui déjà enregistré. Sur Postgres/MySQL,
+> Graft garde **une** connexion ouverte par projet : un `SET`, une table
+> temporaire ou une transaction ouverte dans un bloc reste visible des
+> suivants, comme dans une console.
 
 > 💡 Le dossier `data/` est ignoré par Git (certains jeux de données dépassent
 > la limite de GitHub) : aucune base d'exemple n'est versionnée. Pointe un
@@ -275,5 +290,5 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
   schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées + LSP
   optionnel + formatage).
-- Seul **SQLite** est supporté (Postgres/MySQL en v0.3).
+- Une connexion par projet (pas encore de connexions nommées partagées).
 - Les liens entre blocs sont visuels uniquement (pas d'ordre d'exécution).

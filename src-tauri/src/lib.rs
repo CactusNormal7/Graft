@@ -1,9 +1,11 @@
 mod db;
+mod db_commands;
 mod dialogs;
 mod lsp;
 mod menu;
 mod notebook;
 mod scope;
+mod secrets;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -50,11 +52,13 @@ fn confirm_discard<R: Runtime>(app: &AppHandle<R>, proceed: impl FnOnce() + Send
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    secrets::prepare();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(FileScope::default())
         .manage(UnsavedChanges::default())
         .manage(lsp::LanguageServer::default())
+        .manage(db::Databases::default())
         .menu(menu::build)
         .on_menu_event(|app, event| menu::forward_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
@@ -69,8 +73,11 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            db::execute_sql,
-            db::introspect_schema,
+            db_commands::execute_sql,
+            db_commands::introspect_schema,
+            db_commands::test_connection,
+            db_commands::set_connection_password,
+            db_commands::has_connection_password,
             notebook::save_notebook,
             notebook::load_notebook,
             notebook::write_text_file,

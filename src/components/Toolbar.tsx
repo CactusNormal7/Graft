@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useReactFlow, useStore } from "@xyflow/react";
 import { useGraftStore } from "../store/useGraftStore";
-import { basename } from "../paths";
+import { ENGINE_LABEL, connectionLabel } from "../connection";
+import { ConnectionModal } from "./ConnectionModal";
 import { BLOCK_TYPES } from "../commands";
 
 /** Top toolbar shown in the canvas view (see wireframe screens 02/03). */
 export function Toolbar() {
-  const dbPath = useGraftStore((s) => s.dbPath);
+  const connection = useGraftStore((s) => s.connection);
+  const schemaError = useGraftStore((s) => s.schemaError);
+  const [isConnectionOpen, setConnectionOpen] = useState(false);
   const projectName = useGraftStore((s) => s.projectName);
   const dirty = useGraftStore((s) => s.dirty);
   const nodeCount = useGraftStore((s) => s.nodes.length);
@@ -35,7 +38,7 @@ export function Toolbar() {
     return () => document.removeEventListener("mousedown", onClick);
   }, [menuOpen]);
 
-  const dbLabel = dbPath ? basename(dbPath) : "No database";
+  const dbLabel = connectionLabel(connection);
 
   return (
     <div className="toolbar">
@@ -52,12 +55,17 @@ export function Toolbar() {
       <span className="sep" />
 
       <button
-        className="btn"
-        style={{ color: "var(--success)", borderColor: "var(--success-dim)" }}
-        title={dbPath ?? "No database connected"}
+        className={`btn toolbar__connection${schemaError ? " is-failing" : ""}`}
+        title={
+          schemaError
+            ? `${ENGINE_LABEL[connection?.engine ?? "sqlite"]} · ${schemaError}`
+            : "Edit the connection"
+        }
+        onClick={() => setConnectionOpen(true)}
       >
         {dbLabel}
       </button>
+      {isConnectionOpen && <ConnectionModal onClose={() => setConnectionOpen(false)} />}
       <span className="sep" />
 
       <div className="menu" ref={menuRef}>

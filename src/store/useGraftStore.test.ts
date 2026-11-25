@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The store talks to the backend through Tauri IPC and native dialogs: replace
 // both with in-memory fakes.
 const files = new Map<string, string>();
+const passwords = new Map<string, string>();
 const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
   switch (cmd) {
     case "load_notebook":
@@ -11,7 +12,10 @@ const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
       files.set(args!.path as string, args!.contents as string);
       return null;
     case "introspect_schema":
-      return [];
+      return { tables: [] };
+    case "set_connection_password":
+      passwords.set(args!.connectionId as string, args!.password as string);
+      return null;
     case "execute_sql":
       return { columns: ["x"], rows: [[1]], rows_affected: 0, elapsed_ms: 1 };
   }
@@ -165,5 +169,51 @@ describe("running blocks", () => {
     const second = store.getState().runBlock(id);
     await Promise.all([first, second]);
     expect(invoke.mock.calls.filter(([cmd]) => cmd === "execute_sql")).toHaveLength(1);
+  });
+});
+
+describe("connections", () => {
+  // Earlier tests may leave unsaved edits: accept discarding them here.
+  beforeEach(() => confirmDialog.mockResolvedValue(true));
+  afterEach(() => confirmDialog.mockResolvedValue(false));
+
+  it("opens a pre-v6 SQLite project and saves it as a v6 connection", async () => {
+    files.clear();
+    writeProject("/p/legacy.graft", "legacy");
+    await store.getState().openProjectByPath("/p/legacy.graft");
+    expect(store.getState().connection).toMatchObject({ engine: "sqlite", path: "/tmp/x.db" });
+
+    await store.getState().saveNotebook();
+    const saved = JSON.parse(files.get("/p/legacy.graft")!);
+    expect(saved.version).toBe(6);
+    expect(saved.connection).toMatchObject({ engine: "sqlite", path: "/tmp/x.db" });
+    expect(saved.dbPath).toBe("/tmp/x.db");
+  });
+
+  it("keeps server passwords out of the project file", async () => {
+    files.clear();
+    writeProject("/p/server.graft", "server");
+    await store.getState().openProjectByPath("/p/server.graft");
+    const connection = {
+      id: "conn-pg",
+      engine: "postgres" as const,
+      host: "db.internal",
+      user: "ada",
+      database: "shop",
+    };
+    await store.getState().updateConnection(connection, "s3cret");
+    expect(passwords.get("conn-pg")).toBe("s3cret");
+    expect(unsaved()).toBe(true);
+
+    await store.getState().saveNotebook();
+    const raw = files.get("/p/server.graft")!;
+    expect(raw).not.toContain("s3cret");
+    const saved = JSON.parse(raw);
+    expect(saved.connection).toEqual(connection);
+    expect(saved.dbType).toBe("postgres");
+    expect(saved.dbPath).toBeNull();
+
+    const introspections = invoke.mock.calls.filter(([cmd]) => cmd === "introspect_schema");
+    expect(introspections[introspections.length - 1][1]).toEqual({ connection });
   });
 });

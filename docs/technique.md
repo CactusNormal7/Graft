@@ -24,17 +24,12 @@
 **Postgres, MySQL et SQLite sont les trois moteurs absolument indispensables** —
 SQLite seul (v0.1) n'est qu'un point de départ. `sqlx` est précisément choisi pour
 ça : une seule API async couvre les trois via des features de compilation
-(`postgres`, `mysql`, `sqlite`). Conséquences d'archi à anticiper dès maintenant :
+(`postgres`, `mysql`, `sqlite`). **Les trois sont branchés depuis la v0.3**
+(cf. § Connexions et moteurs).
 
-- le moteur devient une **dimension de la connexion** (type + chaîne de
-  connexion), plus un simple chemin de fichier comme en v0.1 ;
-- la commande d'exécution doit router vers le bon pool selon le moteur ;
-- le mapping des types et les spécificités de dialecte (DDL, procédures,
-  `RETURNING`, etc.) diffèrent par moteur — à abstraire proprement.
-
-L'ambition « complète » (cf. `docs/conceptuel.md` § Ambition) implique aussi un
-**gestionnaire de connexions** (créer/éditer/sauver des connexions nommées,
-secrets) plutôt que la sélection de fichier ad hoc actuelle.
+L'ambition « complète » (cf. `docs/conceptuel.md` § Ambition) implique à terme
+un **gestionnaire de connexions** (connexions nommées partagées entre projets) ;
+aujourd'hui chaque projet porte **sa** connexion, éditable depuis la toolbar.
 
 ### Plateformes cibles
 
@@ -114,6 +109,7 @@ Graft/
 │   ├── App.tsx               # routeur de vue (home / canvas) + coquille
 │   ├── types.ts              # types domaine (BlockType, QueryResult, NotebookFile…)
 │   ├── sqlFormat.ts          # quoteIdent / sqlLiteral / sqlEquals (échappement SQL centralisé — pas un formateur)
+│   ├── connection.ts         # connexions : migration ≤ v5, libellé sans secret, validation du formulaire
 │   ├── formatSql.ts          # formatage SQL (sql-formatter, dialecte du moteur, {{favoris}} préservés)
 │   ├── commands.ts           # commandes de l'app (useAppCommands) partagées palette / menus + SHORTCUTS
 │   ├── shortcuts.ts          # libellés de raccourcis par plateforme (⌘⇧F / Ctrl+Shift+F)
@@ -142,7 +138,9 @@ Graft/
 │   ├── screens/
 │   │   └── HomeScreen.tsx    # écran d'accueil (connexions, quick connect, récents)
 │   ├── components/
-│   │   ├── NewProjectModal.tsx # modale de création de projet (nom, emplacement, moteur, fichier SQLite)
+│   │   ├── NewProjectModal.tsx # modale de création de projet (nom, emplacement, connexion)
+│   │   ├── ConnectionForm.tsx  # formulaire de connexion (moteur, cible, mot de passe, SSL, Test connection)
+│   │   ├── ConnectionModal.tsx # édition de la connexion du projet (bouton de connexion de la toolbar)
 │   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (commandes + favoris) — état `paletteOpen` dans le store
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
 │   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
@@ -173,7 +171,9 @@ Graft/
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
-        ├── db.rs             # moteur SQLite (execute_sql, introspect_schema) + tests
+        ├── db/               # moteurs SQLite / Postgres / MySQL (sans dépendance Tauri) — cf. § Connexions et moteurs
+        ├── db_commands.rs    # commandes Tauri execute_sql / introspect_schema / test_connection / mots de passe
+        ├── secrets.rs        # mots de passe dans le trousseau de l'OS (crate keyring)
         ├── notebook.rs       # E/S fichiers (atomique, .graft only / chemins accordés), projets + tests
         ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
         ├── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
@@ -183,11 +183,71 @@ Graft/
 
 ## Flux de données
 
+### Connexions et moteurs (`src-tauri/src/db/`)
+Le module `db` ne dépend pas de Tauri (réutilisable hors de l'app) :
+
+| Fichier | Rôle |
+|---------|------|
+| `db/mod.rs` | `QueryResult`, `SqlError`, `Databases` (cache de connexions serveur), `test_connection`, `DEFAULT_MAX_ROWS` |
+| `db/config.rs` | `ConnectionConfig { id, engine, path?, host?, port?, database?, user?, sslMode }` + validation ; **pas de champ mot de passe** |
+| `db/sqlite.rs` | exécution SQLite (connexion par appel), positions d'erreur, introspection par pragmas |
+| `db/server.rs` | exécution commune Postgres/MySQL (`sqlx::raw_sql`), typage des cellules texte |
+| `db/postgres.rs` / `db/mysql.rs` | options de connexion (SSL), position d'erreur Postgres, introspection (`pg_catalog` / `information_schema`) |
+| `db/schema.rs` | `TableInfo`, `ColumnInfo`, `ForeignKey`, `SchemaSnapshot` |
+| `db/integration_tests.rs` | tests contre de vrais serveurs (cf. § Tests d'intégration) |
+
+- **Connexion = moteur + cible.** `ConnectionConfig` est sérialisée dans le
+  `.graft` (v6) ; le **mot de passe** est rangé dans le **trousseau de l'OS**
+  (`src-tauri/src/secrets.rs`, crate `keyring` : Keychain macOS, Credential
+  Manager Windows ; service `com.cactus.graft`, compte = `id` de la connexion).
+  Aucune commande ne renvoie un mot de passe au webview ; `execute_sql` /
+  `introspect_schema` le relisent côté Rust (`db_commands.rs`). Il n'apparaît
+  ni dans le `.graft`, ni dans les messages d'erreur, ni dans les logs.
+- **SQLite** : une connexion par appel (fichier local, rien ne reste
+  verrouillé). **Postgres / MySQL** : `Databases` garde **un pool d'une seule
+  connexion** par connexion configurée — une seule connexion = une seule
+  **session** : `SET`, tables temporaires et transactions se comportent comme
+  dans une console SQL. Le pool est réutilisé tant que la config est identique,
+  et oublié (`forget`) quand le mot de passe change.
+- **Scripts multi-instructions** (migrations, corps de procédures) : côté
+  serveur l'exécution passe par `sqlx::raw_sql` (protocole simple/texte), seul
+  chemin qui les accepte sur les deux moteurs. Le **dernier** jeu de résultats
+  qui renvoie des lignes est affiché ; `rows_affected` est cumulé.
+- **Typage** : en protocole texte toutes les valeurs arrivent en chaîne ;
+  `typed_text_value` les retype d'après le type de colonne (entiers, flottants,
+  booléens `t`/`f` ou `0`/`1`). Un `NUMERIC`/`DECIMAL` devient un nombre
+  **seulement s'il tient sans perte dans un f64** (≤ 15 chiffres
+  significatifs), sinon il reste une chaîne exacte — pas d'arrondi silencieux
+  pour un DBA. JSON, dates, UUID… restent des chaînes.
+- **TLS** : `sslMode` (`disable` / `prefer` / `require` / `verify-full`)
+  mappé sur `PgSslMode` / `MySqlSslMode` ; sqlx compilé avec **rustls** +
+  racines natives (pas d'OpenSSL à embarquer sur Windows/macOS, CA d'entreprise
+  du magasin système honorées).
+- **Positions d'erreur** : Postgres fournit une position (1-based, en
+  caractères) convertie en index JS ; MySQL non (le front se rabat sur
+  `near '…' at line N`).
+- **Rétrocompatibilité** : un `.graft` ≤ v5 (`dbType`/`dbPath`) est lu comme une
+  connexion SQLite (`connectionFromFile`, `src/connection.ts`) et réécrit en v6
+  à la sauvegarde ; v6 continue d'écrire `dbType`/`dbPath` pour les lecteurs
+  plus anciens.
+- **UI** : `ConnectionForm` (moteur, fichier SQLite ou hôte/port/base/
+  utilisateur/mot de passe/SSL, bouton **Test connection** →
+  `test_connection`, connexion jetable non mise en cache) est utilisé par
+  `NewProjectModal` (création) et `ConnectionModal` (édition, ouverte par le
+  bouton de connexion de la toolbar ; mot de passe vide = garder celui du
+  trousseau). Échec d'introspection → `store.schemaError` affiché dans la
+  sidebar, bouton de connexion en rouge, statut « unreachable ».
+- **Linux (dev uniquement)** : le backend `keyutils` rattache le trousseau de
+  session au *thread* ; sans session de login (WSL, Xvfb) chaque thread en
+  créerait un. `secrets::prepare()` le rejoint sur le thread principal au
+  démarrage, avant la création des autres threads, qui en héritent.
+
 ### Exécution d'une requête
 1. L'utilisateur clique **▶ Run** sur un bloc → `runBlock(id)` dans le store.
 2. Le store passe le bloc en `running` et appelle la commande Tauri
-   `invoke("execute_sql", { dbPath, sql, maxRows: MAX_FETCH_ROWS })`.
-3. Côté Rust (`db.rs`) : ouverture d'**une** connexion `SqliteConnection` sur
+   `invoke("execute_sql", { connection, sql, maxRows: MAX_FETCH_ROWS })`.
+3. Côté Rust : routage selon `connection.engine` (cf. § Connexions et moteurs).
+   Pour **SQLite** (`db/sqlite.rs`) : ouverture d'**une** connexion `SqliteConnection` sur
    `dbPath` (`SqliteConnectOptions::filename` + `create_if_missing` — pas de
    parsing d'URL, donc les chemins Windows ou contenant `?`/`#` passent tels
    quels ; pas de pool pour une unité de travail unique), puis :
@@ -212,9 +272,9 @@ total (`total_rows`) et un drapeau `truncated` affiché dans le pied du bloc
 (« 5000 / 50000 row(s) · truncated »). L'UI pagine ensuite ces lignes (100/page).
 
 ### Projets (création / ouverture / sauvegarde)
-Un **projet** = un fichier `.graft` + une connexion (type + base). Cycle de vie :
+Un **projet** = un fichier `.graft` + une connexion (`ConnectionConfig`). Cycle de vie :
 
-- **Créer** (`createProject(name, dir, dbType)`) : `create_project_paths` valide
+- **Créer** (`createProject(name, dir, connection, password?)`) : `create_project_paths` valide
   le nom (non vide, ni `.`/`..`, ni séparateur de chemin ni caractère interdit
   sous Windows), **refuse un `.graft` déjà existant** (sinon la première
   sauvegarde l'écraserait), puis dérive `<dir>/<name>.graft` et `<dir>/<name>.db`
@@ -294,7 +354,7 @@ clic, supprimable (✕).
   une erreur structurée `SqlError { message, position }` (`position` = offset
   dans le SQL exécuté, en unités UTF-16 — un index de chaîne JavaScript).
   **SQLite** : sqlx n'expose pas `sqlite3_error_offset` et efface l'état
-  d'erreur avant qu'on puisse le lire ; `db.rs` **re-prépare** donc (sans
+  d'erreur avant qu'on puisse le lire ; `db/sqlite.rs` **re-prépare** donc (sans
   rien exécuter) les instructions une à une via `libsqlite3-sys` (même version
   que celle de sqlx) jusqu'à celle qui échoue avec le **même message**, et lit
   l'offset à ce moment-là (relatif à l'instruction → rendu absolu). Si
@@ -447,8 +507,11 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
 
 | Commande | Signature | Rôle |
 |----------|-----------|------|
-| `execute_sql` | `(db_path: String, sql: String, max_rows: Option<usize>) -> Result<QueryResult, SqlError>` | exécute un statement SQLite ; **plafonne** les lignes renvoyées (défaut 5000) ; erreur = `{ message, position }` |
-| `introspect_schema` | `(db_path: String) -> Result<Vec<TableInfo>, String>` | structure SQLite : tables/vues, colonnes (type, notnull, pk) et **clés étrangères** |
+| `execute_sql` | `(connection: ConnectionConfig, sql: String, max_rows: Option<usize>) -> Result<QueryResult, SqlError>` | exécute du SQL (script multi-instructions accepté) sur le moteur de la connexion ; **plafonne** les lignes (défaut 5000) ; erreur = `{ message, position }` |
+| `introspect_schema` | `(connection) -> Result<SchemaSnapshot, SqlError>` | structure de la base : tables/vues, colonnes (type, notnull, pk), **clés étrangères** |
+| `test_connection` | `(connection, password: Option<String>) -> Result<String, SqlError>` | connexion jetable, renvoie la version du serveur ; mot de passe saisi ou, à défaut, celui du trousseau |
+| `set_connection_password` | `(connection_id, password) -> Result<(), String>` | range le mot de passe dans le trousseau (vide = supprimer) et ferme la connexion ouverte |
+| `has_connection_password` | `(connection_id) -> Result<bool, String>` | indique si un mot de passe est stocké (jamais sa valeur) |
 | `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` (atomique) |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
 | `write_text_file` | `(path: String, contents: String) -> Result<(), String>` | écrit un fichier texte (export `.sql`, atomique) — **chemin accordé en écriture** requis |
@@ -465,7 +528,7 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
-> Convention : `db_path`/`sql` côté Rust (snake_case) ↔ `dbPath`/`sql` côté JS
+> Convention : `connection_id`/`max_rows` côté Rust (snake_case) ↔ `connectionId`/`maxRows` côté JS
 > (Tauri convertit automatiquement le camelCase en snake_case).
 
 ## Sécurité du webview
@@ -512,10 +575,14 @@ unique « Page 1 » (`pagesFromFile`). Les nœuds ont la même forme qu'avant.
 
 ```jsonc
 {
-  "version": 5,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages · 5 schéma en cache + favoris (rétro-compatible en lecture)
+  "version": 6,                            // 1 pré-blocs liés · 2 blocs liés · 3 groupes+parentId · 4 pages · 5 schéma en cache + favoris · 6 connexion (rétro-compatible en lecture)
   "name": "analytics",
-  "dbType": "sqlite",                      // sqlite | postgres | mysql
-  "dbPath": "/chemin/vers/base.sqlite",   // ou null
+  "dbType": "postgres",                    // = connection.engine (gardé pour les lecteurs < v6)
+  "dbPath": null,                          // fichier SQLite, sinon null (gardé pour les lecteurs < v6)
+  "connection": {                          // v6 — jamais de mot de passe (trousseau de l'OS, clé = id)
+    "id": "conn-…", "engine": "postgres",
+    "host": "db.internal", "port": 5432, "database": "shop", "user": "ada", "sslMode": "require"
+  },
   "dbSchema": [ /* TableInfo[] — cf. « Schéma en cache » */ ],
   "snippets": [ { "id": "block-...", "name": "recent_users", "sql": "SELECT …", "blockType": "query" } ],
   "pages": [{ "id": "page-...", "name": "Page 1", "nodes": [
@@ -750,7 +817,7 @@ pnpm build          # type-check (tsc) + build frontend seul
 cargo check         # (dans src-tauri/) vérifie le backend Rust
 pnpm test           # tests frontend (Vitest, une passe)
 pnpm test:watch     # Vitest en mode watch
-cargo test          # (dans src-tauri/) tests unitaires db.rs / notebook.rs / scope.rs / lsp.rs
+cargo test          # (dans src-tauri/) tests unitaires (db/, notebook, scope, lsp, menu, secrets) + intégration si configurée
 pnpm lsp:install    # installe sql-language-server (optionnel) pour l'utilisateur courant
 ```
 
@@ -763,6 +830,28 @@ remplacés par des faux via `vi.mock`). Fixtures de schéma : `src/test/schema.t
 
 > Sous Linux/WSL, `cargo check`/`cargo test` exigent les libs de dev GTK/WebKit
 > de Tauri (`libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`…).
+
+### Tests d'intégration Postgres / MySQL
+`src-tauri/src/db/integration_tests.rs` exerce chaque moteur de bout en bout
+(test de connexion, script multi-instructions, valeurs typées, plafond de
+lignes, introspection PK/FK, position d'erreur, mauvais mot de passe refusé).
+Chaque test **passe sans rien faire** si sa variable d'environnement est
+absente ; avec elle, il crée et supprime ses propres tables `graft_it_*` :
+
+```bash
+GRAFT_TEST_POSTGRES="host=127.0.0.1 port=5432 user=postgres password=… dbname=postgres" \
+GRAFT_TEST_MYSQL="host=127.0.0.1 port=3306 user=graft password=… dbname=graft_test" \
+cargo test end_to_end
+```
+
+Serveurs jetables, par exemple avec Docker :
+
+```bash
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=graftpw postgres:16
+docker run --rm -d -p 3306:3306 -e MYSQL_ROOT_PASSWORD=graftpw -e MYSQL_DATABASE=graft_test mysql:8
+```
+
+(Validés sur PostgreSQL 16 et MariaDB 10.11.)
 
 > Le test `lsp::tests::initializes_a_real_server_when_installed` ne s'exécute
 > vraiment que si `GRAFT_SQL_LANGUAGE_SERVER` pointe sur un serveur (sinon il
@@ -879,10 +968,11 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 - Fonctions **en avance sur la roadmap** : vues de résultat `json`/`chart`,
   **groupes** conteneurs (prévus en v1.0), **pages**, **favoris** `{{nom}}`,
   **palette ⌘K**, pont ORM (INSERT multi-tables).
-- Autocomplétion alimentée par l'introspection **SQLite** uniquement (Postgres/MySQL
-  en v0.3).
-- Seul **SQLite** est branché (Postgres/MySQL en v0.3) — mais `sqlx` est déjà
-  choisi pour une API unifiée.
+- Une connexion par projet (pas encore de gestionnaire de connexions nommées
+  partagées entre projets).
+- **Course clavier rare** : un accélérateur de menu (⌘↵, ⇧⌥F…) est traité par
+  l'OS avant le webview ; une frappe *immédiatement* suivie du raccourci
+  (saisie automatisée) peut exécuter le SQL d'avant cette dernière frappe.
 - Les arêtes entre blocs sont dessinables mais **purement visuelles** : aucune
   sémantique d'exécution (ordre/dépendances) — liée à la question ouverte de la
   granularité des blocs.
