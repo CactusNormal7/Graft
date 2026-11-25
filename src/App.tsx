@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
+import { listen } from "@tauri-apps/api/event";
 import { useGraftStore } from "./store/useGraftStore";
 import { HomeScreen } from "./screens/HomeScreen";
 import { Toolbar } from "./components/Toolbar";
@@ -15,11 +16,23 @@ import { useMenuActions } from "./useMenuActions";
  *  program (a cheap modification-time read; the file is only re-read when
  *  that changes). */
 const PROJECT_FILE_POLL_MS = 2000;
+/** Emitted by the backend when graft-mcp reports a change (src-tauri/src/bridge_server.rs). */
+const BRIDGE_PROJECT_CHANGED_EVENT = "bridge-project-changed";
 
 function Screens() {
   const view = useGraftStore((s) => s.view);
   const saveNotebook = useGraftStore((s) => s.saveNotebook);
   useMenuActions();
+
+  // Live bridge: graft-mcp reports a project file it just wrote.
+  useEffect(() => {
+    const unlisten = listen<string>(BRIDGE_PROJECT_CHANGED_EVENT, (event) =>
+      useGraftStore.getState().notifyProjectChanged(event.payload),
+    );
+    return () => {
+      void unlisten.then((stop) => stop());
+    };
+  }, []);
 
   useEffect(() => {
     if (view !== "canvas") return;

@@ -1,3 +1,4 @@
+mod bridge_server;
 mod claude_desktop;
 mod connection_commands;
 mod db_commands;
@@ -61,6 +62,10 @@ pub fn run() {
         .manage(lsp::LanguageServer::default())
         .manage(graft_core::db::Databases::default())
         .menu(menu::build)
+        .setup(|app| {
+            bridge_server::start(app.handle());
+            Ok(())
+        })
         .on_menu_event(|app, event| menu::forward_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -108,6 +113,10 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app, event| {
+        if let RunEvent::Exit = event {
+            bridge_server::stop(app);
+            return;
+        }
         // App-level quit (e.g. Cmd+Q on macOS) bypasses the window close event.
         // `code: None` means a user/OS-initiated exit, not `app.exit(code)`.
         if let RunEvent::ExitRequested { api, code: None, .. } = event {

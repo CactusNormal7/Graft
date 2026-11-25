@@ -20,6 +20,7 @@ import {
 import { insertIntoEditor, replaceEditorContent } from "../canvas/editorRegistry";
 import { formatSql } from "../formatSql";
 import { connectionFromFile } from "../connection";
+import { mergeExternalBlocks } from "./externalMerge";
 import { referencedKeysOnPage } from "../canvas/tableLinks";
 import { tableKey } from "../canvas/tableRefs";
 import { askConfirm, showError, showMessage } from "../dialogs/appDialogs";
@@ -320,8 +321,11 @@ interface GraftState {
   /** Write the project to its `.graft` file; reports failures to the user.
    *  Asks first when another program changed the file meanwhile. */
   saveNotebook: () => Promise<void>;
-  /** Poll target: offer to reload when another program changed the file. */
+  /** Poll target: merge blocks changed by another program (graft-mcp), or
+   *  offer to reload when that can't be done safely. */
   checkProjectFile: () => Promise<void>;
+  /** The live bridge reports that `path` changed: check it right away. */
+  notifyProjectChanged: (path: string) => void;
 }
 
 /** Immutably patch the data of a single node (works for any node kind — the
@@ -633,6 +637,44 @@ let diskContents: string | null = null;
 let lastDiskStamp: number | null = null;
 /** True while the reload question is on screen (polling must not re-ask). */
 let isAskingAboutDisk = false;
+
+/**
+ * Merge blocks another program changed (`contents` = the file now) into the
+ * open project, keeping unsaved edits (see `externalMerge.ts`). False when it
+ * can't be done safely: the caller asks the user instead.
+ */
+function mergeExternalChange(
+  get: () => GraftState,
+  set: (partial: Partial<GraftState>) => void,
+  contents: string,
+): boolean {
+  if (diskContents === null) return false;
+  let base: NotebookFile;
+  let theirs: NotebookFile;
+  try {
+    base = JSON.parse(diskContents) as NotebookFile;
+    theirs = JSON.parse(contents) as NotebookFile;
+  } catch {
+    return false; // Unparseable on either side: let the user decide.
+  }
+  const state = get();
+  const hadUnsavedChanges = hasUnsavedChanges(state);
+  const merged = mergeExternalBlocks(base, theirs, commitActivePage(state), (node) =>
+    deserializeNodes([node])[0],
+  );
+  if (!merged) return false;
+  const pages = state.pages.map((page) => {
+    const mergedPage = merged.find((m) => m.id === page.id);
+    return mergedPage ? { ...page, nodes: sortGroupsFirst(mergedPage.nodes) } : page;
+  });
+  const active = pages.find((page) => page.id === state.activePageId) ?? pages[0];
+  set({ pages, nodes: active.nodes });
+  // Without local edits the app now matches the file; otherwise it stays
+  // dirty, and the merged result is what the next save writes.
+  if (hadUnsavedChanges) diskContents = contents;
+  else markSaved(get, set, contents);
+  return true;
+}
 
 /** Apply a project file read from disk to the store (open or reload). */
 function applyProjectFile(
@@ -1329,6 +1371,8 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     lastDiskStamp = stamp;
     const contents = await invoke<string>("load_notebook", { path: projectPath });
     if (contents === diskContents || get().projectPath !== projectPath) return;
+    // Blocks created or edited by Claude merge in live; ask only otherwise.
+    if (mergeExternalChange(get, set, contents)) return;
 
     isAskingAboutDisk = true;
     try {
@@ -1346,6 +1390,12 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     } finally {
       isAskingAboutDisk = false;
     }
+  },
+
+  notifyProjectChanged: (path) => {
+    if (path !== get().projectPath) return;
+    lastDiskStamp = null;
+    void get().checkProjectFile();
   },
 
   saveNotebook: async () => {

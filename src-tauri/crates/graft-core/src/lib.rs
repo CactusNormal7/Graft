@@ -3,6 +3,7 @@
 //! known projects (`registry`) and connection passwords (`secrets`).
 //! Nothing here depends on Tauri.
 
+pub mod bridge;
 pub mod connections;
 pub mod db;
 pub mod files;

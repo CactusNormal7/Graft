@@ -287,6 +287,31 @@ describe("changes made outside the app", () => {
     await store.getState().checkProjectFile(); // records the current stamp
   });
 
+  it("merges a block added by Claude without asking, keeping unsaved edits", async () => {
+    await store.getState().saveNotebook(); // disk now has the app's page
+    await store.getState().checkProjectFile();
+    store.getState().addBlock("query"); // unsaved local edit
+    const mine = store.getState().nodes[0].id;
+    editOnDisk("/p/w.graft", (file) => {
+      const pages = file.pages as Array<{ nodes: unknown[] }>;
+      pages[0].nodes.push({
+        id: "block-mcp-1",
+        type: "sqlBlock",
+        position: { x: 80, y: 500 },
+        data: { title: "From Claude", blockType: "query", sql: "SELECT 42" },
+      });
+    });
+    await store.getState().checkProjectFile();
+    expect(useDialogStore.getState().queue).toHaveLength(0);
+    expect(store.getState().nodes.map((n) => n.id)).toEqual([mine, "block-mcp-1"]);
+    expect(unsaved()).toBe(true);
+
+    await store.getState().saveNotebook(); // no overwrite question: merged
+    expect(useDialogStore.getState().queue).toHaveLength(0);
+    const saved = JSON.parse(files.get("/p/w.graft")!);
+    expect(saved.pages[0].nodes.map((n: { id: string }) => n.id)).toEqual([mine, "block-mcp-1"]);
+  });
+
   it("offers to reload, and reloads when accepted", async () => {
     editOnDisk("/p/w.graft", (file) => (file.name = "renamed by Claude"));
     const check = store.getState().checkProjectFile();

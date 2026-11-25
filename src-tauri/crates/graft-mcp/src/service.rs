@@ -12,6 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
+use graft_core::bridge::{self, BridgeEvent};
 use graft_core::db::{self, ConnectionConfig, Databases, Engine, QueryResult, SqlError};
 use graft_core::files::{read_project, write_project};
 use graft_core::inserts::generate_inserts;
@@ -71,6 +72,8 @@ pub fn explain_statement(engine: Engine, sql: &str) -> String {
 
 pub struct GraftService {
     registry_file: PathBuf,
+    /// Live-bridge file of the running app (None: never notify).
+    bridge_file: Option<PathBuf>,
     databases: Databases,
 }
 
@@ -93,8 +96,20 @@ impl OpenProject {
 }
 
 impl GraftService {
-    pub fn new(registry_file: PathBuf) -> Self {
-        GraftService { registry_file, databases: Databases::default() }
+    pub fn new(registry_file: PathBuf, bridge_file: Option<PathBuf>) -> Self {
+        GraftService { registry_file, bridge_file, databases: Databases::default() }
+    }
+
+    /// Save the project and, when the app is open, have it show the change
+    /// at once (live bridge). A closed app is not an error: it reads the file
+    /// when it next opens it.
+    async fn save_and_notify(&self, project: &OpenProject) -> Result<(), String> {
+        project.save()?;
+        if let Some(bridge_file) = &self.bridge_file {
+            let event = BridgeEvent::ProjectChanged { path: project.entry.path.clone() };
+            bridge::notify(bridge_file, &event).await;
+        }
+        Ok(())
     }
 
     fn registry(&self) -> Result<Registry, String> {
@@ -191,17 +206,17 @@ impl GraftService {
         Ok(json!(block))
     }
 
-    pub fn create_block(&self, project: &str, new: NewBlock) -> Result<Value, String> {
+    pub async fn create_block(&self, project: &str, new: NewBlock) -> Result<Value, String> {
         let mut project = self.open(project)?;
         let block = project.notebook.create_block(new)?;
-        project.save()?;
+        self.save_and_notify(&project).await?;
         Ok(json!(block))
     }
 
-    pub fn update_block(&self, project: &str, block_id: &str, patch: BlockPatch) -> Result<Value, String> {
+    pub async fn update_block(&self, project: &str, block_id: &str, patch: BlockPatch) -> Result<Value, String> {
         let mut project = self.open(project)?;
         let block = project.notebook.update_block(block_id, patch)?;
-        project.save()?;
+        self.save_and_notify(&project).await?;
         Ok(json!(block))
     }
 
@@ -361,7 +376,7 @@ mod tests {
         let mut registry = Registry::default();
         registry.register(&project_path.to_string_lossy(), "shop");
         registry.save(&registry_file).unwrap();
-        Fixture { dir, service: GraftService::new(registry_file) }
+        Fixture { dir, service: GraftService::new(registry_file, None) }
     }
 
     #[tokio::test]
@@ -385,14 +400,38 @@ mod tests {
         let created = f
             .service
             .create_block("shop", NewBlock { sql: "SELECT count(*) FROM users".into(), ..Default::default() })
+            .await
             .unwrap();
         let id = created["id"].as_str().unwrap().to_string();
         f.service
             .update_block("shop", &id, BlockPatch { title: Some("Count".into()), ..Default::default() })
+            .await
             .unwrap();
         let reread = f.service.read_block("shop", &id).unwrap();
         assert_eq!(reread["title"], json!("Count"));
         assert_eq!(f.service.list_blocks("shop", None).unwrap().as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn notifies_the_running_app_after_writing_a_block() {
+        let mut f = fixture("bridge").await;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let token = bridge::new_token().unwrap();
+        let (sender, mut received) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(bridge::serve(listener, token.clone(), move |event| {
+            let _ = sender.send(event);
+        }));
+        let bridge_file = f.dir.join("bridge.json");
+        bridge::write_info(&bridge_file, &bridge::BridgeInfo { port, token, pid: 0 }).unwrap();
+        f.service.bridge_file = Some(bridge_file);
+
+        f.service
+            .create_block("shop", NewBlock { sql: "SELECT 1".into(), ..Default::default() })
+            .await
+            .unwrap();
+        let BridgeEvent::ProjectChanged { path } = received.recv().await.unwrap();
+        assert!(path.ends_with("shop.graft"), "{path}");
     }
 
     #[tokio::test]

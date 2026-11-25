@@ -214,13 +214,13 @@ impl GraftServer {
             x: args.x,
             y: args.y,
         };
-        reply(self.service.create_block(&args.project, new))
+        reply(self.service.create_block(&args.project, new).await)
     }
 
     #[tool(description = "Change a block's SQL, title, type or position (saved to the .graft file; nothing is executed).")]
     async fn update_block(&self, Parameters(args): Parameters<UpdateBlockArgs>) -> Result<CallToolResult, McpError> {
         let patch = BlockPatch { title: args.title, block_type: args.block_type, sql: args.sql, x: args.x, y: args.y };
-        reply(self.service.update_block(&args.project, &args.block_id, patch))
+        reply(self.service.update_block(&args.project, &args.block_id, patch).await)
     }
 
     #[tool(description = "Run one read-only SQL statement on the project's database. Writes are refused (use execute_write).")]

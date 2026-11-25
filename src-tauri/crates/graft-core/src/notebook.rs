@@ -415,7 +415,9 @@ mod tests {
         assert!(notebook.update_block(&created.id, BlockPatch { block_type: Some("nope".into()), ..Default::default() }).is_err());
         assert!(notebook.create_block(NewBlock { page_id: Some("missing".into()), ..Default::default() }).is_err());
 
-        let saved: Value = serde_json::from_str(&notebook.to_json()).unwrap();
+        let json = notebook.to_json();
+        assert!(json.find("\"version\"").unwrap() < json.find("\"name\"").unwrap(), "key order is kept");
+        let saved: Value = serde_json::from_str(&json).unwrap();
         assert_eq!(saved["futureField"]["kept"], json!(true));
         assert_eq!(saved["pages"][0]["nodes"][0]["data"]["resultView"], json!("chart"));
         assert_eq!(saved["pages"][0]["nodes"][2]["data"]["status"], json!("idle"));

@@ -19,7 +19,8 @@ async fn main() {
         std::process::exit(1);
     };
     graft_core::secrets::prepare();
-    let server = GraftServer::new(GraftService::new(registry_file));
+    let bridge_file = graft_core::bridge::default_path();
+    let server = GraftServer::new(GraftService::new(registry_file, bridge_file));
     match server.serve(rmcp::transport::stdio()).await {
         Ok(running) => {
             if let Err(e) = running.waiting().await {

@@ -126,6 +126,7 @@ Graft/
 │   │   └── serverDiagnostics.ts # diagnostics publiés par le serveur, par document → offsets éditeur
 │   ├── store/
 │   │   ├── useGraftStore.ts  # store Zustand (view, pages, nodes/edges de la page active, dbPath, palette, actions)
+│   │   ├── externalMerge.ts  # fusion 3 voies des blocs modifiés hors de l'app (Claude) dans l'état courant
 │   │   └── snippets.ts       # favoris : expansion {{nom}} + normalisation des noms
 │   ├── styles/
 │   │   ├── app.css           # classes de la coquille + composants (issu du wireframe)
@@ -177,6 +178,7 @@ Graft/
     │       └── src/
     │           ├── db/       # moteurs SQLite / Postgres / MySQL — cf. § Connexions et moteurs
     │           ├── inserts.rs # INSERT depuis un résultat (portage de orm.ts / resultShape.ts, parent → enfants compris)
+    │           ├── bridge.rs # pont live MCP ↔ app : protocole (ligne JSON + jeton), serveur, client notify
     │           ├── connections.rs # bibliothèque locale de connexions nommées (sans mot de passe)
     │           ├── files.rs  # E/S .graft : écriture atomique, règle « .graft uniquement », noms et chemins de projet
     │           ├── notebook.rs # lecture/édition des blocs d'un .graft en Rust (champs inconnus préservés) + expansion {{favoris}}
@@ -188,6 +190,7 @@ Graft/
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
+        ├── bridge_server.rs  # pont live : écoute 127.0.0.1, bridge.json, événement bridge-project-changed
         ├── claude_desktop.rs # « Install in Claude Desktop » : fusion de claude_desktop_config.json + tests
         ├── connection_commands.rs # bibliothèque de connexions nommées (list / save / delete)
         ├── registry_commands.rs # register_project / get_mcp_writes / set_mcp_writes (registre des projets connus)
@@ -405,15 +408,47 @@ garde `diskContents` = le texte qu'il a lu ou écrit en dernier :
 - **Surveillance** : toutes les 2 s (`PROJECT_FILE_POLL_MS`, `App.tsx`),
   `checkProjectFile` lit la date de modification (`project_file_stamp`, peu
   coûteux) et ne relit le fichier que si elle a changé. Si le contenu diffère
-  de `diskContents`, une fenêtre propose **Reload** (bouton danger, avec
-  avertissement, s'il y a des modifications non sauvegardées qui seraient
-  perdues). Une seule question à la fois.
+  de `diskContents` :
+  1. **fusion en direct** (`mergeExternalChange` → `src/store/externalMerge.ts`,
+     3 voies : base = `diskContents`, theirs = disque, mine = l'état courant) :
+     blocs SQL ajoutés par Claude, ou modifiés (SQL, titre, type, position)
+     quand l'utilisateur n'a pas touché ces blocs, sont appliqués **sans
+     question et sans perdre les modifications non sauvegardées**. Sans
+     modification locale, l'état devient le nouveau fichier de référence ;
+     avec, il reste « dirty » et la sauvegarde écrira le résultat fusionné ;
+  2. sinon (autre chose a changé — nom, pages, favoris… —, bloc modifié des
+     deux côtés, bloc modifié par Claude mais supprimé localement), une
+     fenêtre propose **Reload** (bouton danger, avec avertissement s'il y a
+     des modifications non sauvegardées qui seraient perdues). Une seule
+     question à la fois.
 - **À la sauvegarde** (`confirmOverwrite`) : si le fichier sur disque ne
   correspond plus à `diskContents`, l'app demande avant **Overwrite** au lieu
   d'écraser silencieusement ; refuser annule la sauvegarde.
 - Le rechargement (`applyProjectFile`, partagé avec l'ouverture) remplace
   pages, blocs, favoris et connexion, puis réintrospecte.
-- Pas de fusion automatique ni de pont « live » (prévu plus tard, cf. § Intégration Claude).
+- **Pont live** (immédiat, au lieu d'attendre le sondage) : cf. § Pont live
+  MCP ↔ app.
+- `graft-core` écrit le JSON avec `serde_json` + `preserve_order` : l'ordre des
+  clés de l'app est conservé, d'où des diffs Git minimes et une comparaison
+  « rien d'autre n'a changé » fiable pour la fusion.
+
+### Pont live MCP ↔ app (`graft-core/src/bridge.rs`)
+- Au démarrage, l'app (`src-tauri/src/bridge_server.rs`) écoute sur
+  **127.0.0.1**, port aléatoire, et écrit
+  `<données utilisateur>/Graft/bridge.json` = `{ port, token, pid }` (droits
+  `0600` sous Unix ; profil utilisateur sous Windows). Le **jeton** (32 octets
+  aléatoires du système, `getrandom`) est comparé sans court-circuit ; le
+  fichier est supprimé à la fermeture s'il est toujours le sien.
+- Après chaque `create_block` / `update_block`, `graft-mcp` envoie **une ligne
+  JSON** `{ token, event: { kind: "project_changed", path } }` (délai max
+  500 ms ; app fermée → rien n'écoute, on ignore). L'app répond `ok`, émet
+  l'événement Tauri `bridge-project-changed`, et le store
+  (`notifyProjectChanged`) relance tout de suite `checkProjectFile` → fusion
+  en direct. Seul « ce fichier a changé » transite : l'app relit le fichier
+  elle-même, rien d'autre n'est accepté.
+- Vérifié de bout en bout dans l'app : un bloc créé par `graft-mcp` apparaît
+  sur le canvas sans fenêtre, une modification locale non sauvegardée est
+  conservée.
 
 ### Projets récents
 Liste persistée dans **`localStorage`** (`graft.recentProjects`, max 12) :
@@ -1044,9 +1079,10 @@ pendant que l'app l'affiche, les deux versions divergent (aujourd'hui la
 sauvegarde de l'app écraserait les changements de Claude). Étapes :
 (a) l'app **surveille** le fichier ouvert et propose de recharger — **fait**
 (cf. § Modifications faites hors de l'app) ;
-(b) plus tard, un **pont local** (socket localhost authentifié par jeton, exposé
-par l'app Tauri) auquel le serveur MCP parle quand l'app est ouverte, pour que
-les blocs créés par Claude apparaissent **en direct** sur le canvas.
+(b) un **pont local** (socket localhost authentifié par jeton, exposé par l'app
+Tauri) auquel le serveur MCP parle quand l'app est ouverte, pour que les blocs
+créés par Claude apparaissent **en direct** sur le canvas — **fait** (cf.
+§ Pont live MCP ↔ app).
 
 **Garde-fous (non négociables pour une audience DBA) :**
 - `run_query` **en lecture seule par défaut** (connexion SQLite ouverte en

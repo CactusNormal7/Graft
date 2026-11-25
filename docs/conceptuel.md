@@ -88,8 +88,9 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
 - **Intégration Claude** : *besoin acté*. Le **serveur MCP local**
   (`graft-mcp`) est en place : Claude lit le schéma et les blocs, en crée, et
   exécute des requêtes en **lecture seule** ; les écritures se débloquent
-  projet par projet dans l'app. Restent ouverts le **pont live** avec l'app
-  ouverte et le **connecteur distant** pour claude.ai. Détails dans
+  projet par projet dans l'app. Quand l'app est ouverte, les blocs créés par
+  Claude y apparaissent **en direct** (pont local). Reste ouvert le
+  **connecteur distant** pour claude.ai. Détails dans
   `docs/technique.md` § Intégration Claude.
 
 ## Trajectoire (roadmap)
