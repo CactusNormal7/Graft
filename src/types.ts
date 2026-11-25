@@ -126,6 +126,17 @@ export interface GroupBlockData {
   [key: string]: unknown;
 }
 
+/**
+ * Data of a "table" node: a schema table shown on the canvas, linked by
+ * derived dashed edges to the SQL blocks that reference it.
+ */
+export interface TableNodeData {
+  table: string;
+  /** Namespace, when not the engine's default one. */
+  schema?: string;
+  [key: string]: unknown;
+}
+
 /** One column of a table/view, as introspected from the database. */
 export interface ColumnInfo {
   name: string;
@@ -243,11 +254,11 @@ export interface ConnectionConfig {
 export interface NotebookNode {
   id: string;
   /** Absent in v1 files (all nodes were sqlBlock). */
-  type?: "sqlBlock" | "resultBlock" | "group";
+  type?: "sqlBlock" | "resultBlock" | "group" | "tableNode";
   position: { x: number; y: number };
   /** Set on a block that lives inside a group container (v3+). */
   parentId?: string;
-  data: SqlBlockData | ResultBlockData | GroupBlockData;
+  data: SqlBlockData | ResultBlockData | GroupBlockData | TableNodeData;
 }
 
 /** A serialized edge. */

@@ -217,3 +217,33 @@ describe("connections", () => {
     expect(introspections[introspections.length - 1][1]).toEqual({ connection });
   });
 });
+
+describe("table nodes", () => {
+  beforeEach(() => confirmDialog.mockResolvedValue(true));
+  afterEach(() => confirmDialog.mockResolvedValue(false));
+
+  it("adds the referenced tables once and saves them without execution state", async () => {
+    files.clear();
+    writeProject("/p/t.graft", "t");
+    await store.getState().openProjectByPath("/p/t.graft");
+    const table = (name: string) => ({ name, kind: "table", columns: [], foreign_keys: [] });
+    store.setState({ dbSchema: [table("users"), table("orders")] });
+
+    store.getState().addBlock("query");
+    const id = store.getState().nodes[0].id;
+    store.getState().updateSql(id, "SELECT * FROM users JOIN orders ON orders.user_id = users.id");
+
+    expect(store.getState().addReferencedTables()).toBe(2);
+    expect(store.getState().addReferencedTables()).toBe(0);
+    store.getState().addTableNode("users");
+    const tables = store.getState().nodes.filter((n) => n.type === "tableNode");
+    expect(tables.map((n) => n.data.table)).toEqual(["users", "orders"]);
+    // Stacked left of the block.
+    expect(tables[0].position.x).toBeLessThan(store.getState().nodes[0].position.x);
+
+    await store.getState().saveNotebook();
+    const saved = JSON.parse(files.get("/p/t.graft")!);
+    const savedTable = saved.pages[0].nodes.find((n: { type: string }) => n.type === "tableNode");
+    expect(savedTable.data).toEqual({ table: "users" });
+  });
+});

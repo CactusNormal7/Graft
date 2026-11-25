@@ -156,6 +156,9 @@ Graft/
 │       ├── blockChrome.tsx   # UI partagée bloc SQL / bloc résultat : statut, icônes de vue, pied de résultat
 │       ├── BlockContextMenu.tsx # menu contextuel générique (portail vers <body>)
 │       ├── GroupNode.tsx     # nœud conteneur coloré (parent React Flow) : titre, couleur, resize
+│       ├── TableNodeView.tsx # nœud « table » : une table du schéma posée sur le canvas (colonnes, PK/FK)
+│       ├── tableRefs.ts      # tables référencées par un SQL (scan léger : FROM/JOIN/INTO/UPDATE/TABLE/REFERENCES/ON)
+│       ├── tableLinks.ts     # arêtes dérivées table → bloc (jamais stockées) + tables référencées d'une page
 │       ├── editorRegistry.ts # registre id→EditorView pour insérer depuis la sidebar / la palette
 │       ├── useInnerScroll.ts # scroll molette interne au bloc sélectionné (pinch = zoom canvas)
 │       ├── ResultTable.tsx   # conteneur d'un result set : vue table, pagination client, menus cellule/ligne
@@ -633,6 +636,8 @@ unique « Page 1 » (`pagesFromFile`). Les nœuds ont la même forme qu'avant.
   "dbSchema": [ /* TableInfo[] — cf. « Schéma en cache » */ ],
   "snippets": [ { "id": "block-...", "name": "recent_users", "sql": "SELECT …", "blockType": "query" } ],
   "pages": [{ "id": "page-...", "name": "Page 1", "nodes": [
+    { "id": "block-...", "type": "tableNode", "position": { "x": -260, "y": 80 },
+      "data": { "table": "orders", "schema": "sales" } },  // table posée sur le canvas (liens dérivés, non stockés)
     {
       "id": "block-...",
       "type": "sqlBlock",                  // sqlBlock | resultBlock | group
@@ -813,6 +818,30 @@ Structure du rendu : `.sql-block__result` (colonne flex, **sans** scroll) →
 pas un enfant : elle reste toujours la dernière ligne du bloc et ne peut pas
 flotter par-dessus les données (un `position: sticky` s'y comportait mal dans ce
 contexte flex imbriqué).
+
+### Liens blocs ↔ tables (`tableNode`)
+- Un nœud **`tableNode`** (`data: { table, schema? }`, `TableNodeView.tsx`) pose
+  une table du schéma sur le canvas ; ses colonnes viennent du schéma
+  introspecté (à jour après une migration ; cadre pointillé si la table
+  n'existe plus). Persisté dans la page comme les autres nœuds, **sans** état
+  d'exécution, largeur fixe (220), hauteur selon les colonnes (12 max, puis
+  « +N more »).
+- Les **liens** sont **dérivés** : `tableLinkEdges` (`tableLinks.ts`) relie
+  chaque bloc SQL aux nœuds table de la page que son SQL référence
+  (`referencedTableKeys`, `tableRefs.ts` : commentaires et chaînes ignorés,
+  identifiants nus ou cités `"…"`/`` `…` ``/`[…]`, noms qualifiés
+  `schema.table`, listes `FROM a, b`, alias sautés ; un nom non qualifié
+  correspond aussi à une table d'un autre schéma). Arêtes pointillées
+  `--info`, tracées **table → bloc**, non sélectionnables ni supprimables,
+  ajoutées à l'affichage dans `GraftCanvas` seulement : **jamais stockées
+  ni sauvegardées**, elles suivent le SQL. Purement visuelles, aucune
+  sémantique d'exécution (cf. questions ouvertes). Un cache
+  (`WeakMap` schéma → SQL → tables) évite de rescanner le SQL à chaque image
+  pendant un déplacement.
+- Ajout : clic droit sur une table/vue de la sidebar → **Add to canvas**
+  (`addTableNode`, sans doublon par page) ; commande **Add referenced tables
+  to canvas** (palette, menu View) → `addReferencedTables` empile les tables
+  référencées absentes à gauche des blocs.
 
 ### Bloc résultat lié (`resultBlock`)
 

@@ -54,7 +54,10 @@ pub const VIEW_ZOOM: &[CommandItem] = &[
     item("view.zoomOut", "Zoom Out", Some("CmdOrCtrl+-")),
     item("view.fit", "Fit Canvas", Some("CmdOrCtrl+0")),
 ];
-pub const VIEW_SCHEMA: &[CommandItem] = &[item("schema.refresh", "Refresh Schema", None)];
+pub const VIEW_SCHEMA: &[CommandItem] = &[
+    item("schema.refresh", "Refresh Schema", None),
+    item("canvas.addReferencedTables", "Add Referenced Tables to Canvas", None),
+];
 
 /// Every custom item, for event routing checks and tests.
 pub const ALL_ITEMS: &[&[CommandItem]] = &[

@@ -2052,3 +2052,70 @@ button {
   color: var(--muted-2);
   font-size: var(--text-xs);
 }
+
+/* Table nodes on the canvas (src/canvas/TableNodeView.tsx) */
+.table-node {
+  background: var(--panel);
+  border: 1px solid var(--info-dim);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-float);
+  font-family: var(--font-mono);
+  overflow: hidden;
+}
+
+.table-node.selected { border-color: var(--info); }
+.table-node.is-missing { border-style: dashed; opacity: 0.7; }
+
+.table-node__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 8px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.table-node__kind {
+  font-size: 9px;
+  color: var(--info);
+  text-transform: uppercase;
+}
+
+.table-node__name {
+  flex: 1;
+  color: var(--text);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-node__missing,
+.table-node__more {
+  padding: 2px 8px;
+  color: var(--muted-2);
+  font-size: var(--text-xs);
+}
+
+.table-node__columns { padding: 4px 0; }
+
+.table-node__column {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+.table-node__column-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.table-node__type {
+  margin-left: auto;
+  color: var(--muted-2);
+  white-space: nowrap;
+}

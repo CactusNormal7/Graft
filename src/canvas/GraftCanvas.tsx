@@ -11,11 +11,14 @@ import { useGraftStore, type AnyNode } from "../store/useGraftStore";
 import { SqlBlockNode } from "./SqlBlockNode";
 import { ResultBlockNode } from "./ResultBlockNode";
 import { GroupNode } from "./GroupNode";
+import { TableNodeView } from "./TableNodeView";
+import { tableLinkEdges } from "./tableLinks";
 
 /** The infinite canvas hosting all SQL blocks (wireframe screens 02/03). */
 export function GraftCanvas() {
   const nodes = useGraftStore((s) => s.nodes);
   const edges = useGraftStore((s) => s.edges);
+  const dbSchema = useGraftStore((s) => s.dbSchema);
   const onNodesChange = useGraftStore((s) => s.onNodesChange);
   const onEdgesChange = useGraftStore((s) => s.onEdgesChange);
   const onConnect = useGraftStore((s) => s.onConnect);
@@ -25,8 +28,21 @@ export function GraftCanvas() {
   const { getIntersectingNodes, getInternalNode } = useReactFlow();
 
   const nodeTypes = useMemo(
-    () => ({ sqlBlock: SqlBlockNode, resultBlock: ResultBlockNode, group: GroupNode }),
+    () => ({
+      sqlBlock: SqlBlockNode,
+      resultBlock: ResultBlockNode,
+      group: GroupNode,
+      tableNode: TableNodeView,
+    }),
     [],
+  );
+
+  // Block → table links are derived from the SQL, not stored: appended here
+  // only. Changes React Flow reports for them match no stored edge and are
+  // ignored by applyEdgeChanges.
+  const displayedEdges = useMemo(
+    () => [...edges, ...tableLinkEdges(nodes, dbSchema)],
+    [edges, nodes, dbSchema],
   );
 
   // On drop, attach a block to the group it overlaps (or detach it), converting
@@ -58,7 +74,7 @@ export function GraftCanvas() {
     <div style={{ flex: 1, position: "relative", minWidth: 0 }}>
       <ReactFlow
         nodes={nodes}
-        edges={edges}
+        edges={displayedEdges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}

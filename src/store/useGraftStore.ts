@@ -20,6 +20,8 @@ import {
 import { insertIntoEditor, replaceEditorContent } from "../canvas/editorRegistry";
 import { formatSql } from "../formatSql";
 import { connectionFromFile } from "../connection";
+import { referencedKeysOnPage } from "../canvas/tableLinks";
+import { tableKey } from "../canvas/tableRefs";
 import { showError, showMessage } from "../dialogs/appDialogs";
 import { expandSnippets, toSnippetName } from "./snippets";
 import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
@@ -42,6 +44,8 @@ import type {
   ResultView,
   Snippet,
   SqlBlockData,
+  TableInfo,
+  TableNodeData,
 } from "../types";
 
 /** A canvas node whose data is a SQL block. */
@@ -54,7 +58,11 @@ export type ResultNode = Node<ResultBlockData, "resultBlock">;
 export type GroupNode = Node<GroupBlockData, "group">;
 
 /** Anything that can live on the canvas. */
-export type AnyNode = SqlNode | ResultNode | GroupNode;
+/** A schema table shown on the canvas (target of derived block links). */
+export type TableNode = Node<TableNodeData, "tableNode">;
+
+/** Anything that can live on the canvas. */
+export type AnyNode = SqlNode | ResultNode | GroupNode | TableNode;
 
 /** A page (Excel-like sheet): its own canvas of nodes + edges. */
 export interface Page {
@@ -67,6 +75,7 @@ export interface Page {
 const isSqlNode = (n: AnyNode): n is SqlNode => n.type === "sqlBlock";
 const isResultNode = (n: AnyNode): n is ResultNode => n.type === "resultBlock";
 const isGroupNode = (n: AnyNode): n is GroupNode => n.type === "group";
+const isTableNode = (n: AnyNode): n is TableNode => n.type === "tableNode";
 
 /** Keep group (parent) nodes ahead of blocks in the array — React Flow requires
  *  a parent to precede its children, and it makes groups render behind. */
@@ -84,6 +93,15 @@ const DEFAULT_BLOCK_HEIGHT = 300;
 /** Linked result blocks get a bit more room (they're all result). */
 const DEFAULT_RESULT_WIDTH = 640;
 const DEFAULT_RESULT_HEIGHT = 360;
+
+/** Width of a table node (its height follows the column list). */
+const TABLE_NODE_WIDTH = 220;
+/** Gap between the table column added by `addReferencedTables` and the blocks. */
+const TABLE_COLUMN_GAP = 120;
+const TABLE_NODE_SPACING = 40;
+/** Rough height of a table node, to stack them without overlap. */
+const TABLE_NODE_ROW_HEIGHT = 22;
+const TABLE_NODE_HEADER_HEIGHT = 40;
 
 /** Default container size for a new group. */
 const DEFAULT_GROUP_WIDTH = 480;
@@ -251,6 +269,11 @@ interface GraftState {
   /** Create a query block pre-filled with `SELECT * FROM <table> LIMIT 100`
    *  and run it immediately (double-click a table in the sidebar). */
   addSelectBlock: (table: string, schema?: string) => void;
+  /** Put a schema table on the canvas (no-op if it is already on the page). */
+  addTableNode: (table: string, schema?: string) => void;
+  /** Add a node for every table referenced by the page's blocks and missing
+   *  from it, stacked left of the blocks. Returns how many were added. */
+  addReferencedTables: () => number;
 
   // --- Group containers ---
   addGroup: () => void;
@@ -365,6 +388,24 @@ function staggeredPosition(index: number): { x: number; y: number } {
   };
 }
 
+function tableKeyOf(node: TableNode): string {
+  return tableKey({ name: node.data.table, schema: node.data.schema });
+}
+
+function newTableNode(
+  table: string,
+  schema: string | undefined,
+  position: { x: number; y: number },
+): TableNode {
+  return {
+    id: nextId(),
+    type: "tableNode",
+    position,
+    width: TABLE_NODE_WIDTH,
+    data: schema ? { table, schema } : { table },
+  };
+}
+
 /** A fresh, idle SQL block at the default size. */
 function newSqlNode(
   position: { x: number; y: number },
@@ -428,7 +469,7 @@ function serializeNodes(nodes: AnyNode[]): NotebookNode[] {
     // Reset transient execution state (blocks only) so saved files stay
     // diff-friendly. Group nodes carry no execution state.
     data:
-      n.type === "group"
+      n.type === "group" || n.type === "tableNode"
         ? n.data
         : { ...n.data, status: "idle", result: null, error: null, editorError: undefined },
   })) as NotebookNode[];
@@ -448,6 +489,17 @@ function deserializeNodes(rawNodes: NotebookNode[] | undefined): AnyNode[] {
       // Always give nodes explicit dimensions: files saved before sizes were
       // set would otherwise measure themselves against their content and blow
       // up (a wide result table, a long generated script…).
+      // Table nodes size themselves to their column list: width only.
+      if (kind === "tableNode") {
+        return {
+          id: n.id,
+          type: kind,
+          position: n.position,
+          ...(n.parentId ? { parentId: n.parentId } : {}),
+          data: n.data,
+          width: TABLE_NODE_WIDTH,
+        } as AnyNode;
+      }
       const isGroup = kind === "group";
       const isResult = kind === "resultBlock";
       const fallbackWidth = isGroup
@@ -794,6 +846,38 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     });
     // Auto-run so double-clicking a table immediately shows its rows.
     void get().runBlock(id);
+  },
+
+  addTableNode: (table, schema) => {
+    const nodes = get().nodes;
+    const key = schema ? `${schema}.${table}` : table;
+    if (nodes.some((n) => isTableNode(n) && tableKeyOf(n) === key)) return;
+    const node = newTableNode(table, schema, staggeredPosition(nodes.length));
+    set({ nodes: [...nodes, node] });
+  },
+
+  addReferencedTables: () => {
+    const { nodes, dbSchema } = get();
+    const onCanvas = new Set(nodes.filter(isTableNode).map(tableKeyOf));
+    const missing = referencedKeysOnPage(nodes, dbSchema)
+      .map((key) => dbSchema.find((t) => tableKey(t) === key))
+      .filter((t): t is TableInfo => t !== undefined && !onCanvas.has(tableKey(t)));
+    if (missing.length === 0) return 0;
+
+    const blocks = nodes.filter((n) => !isGroupNode(n) && !isTableNode(n) && !n.parentId);
+    const left = blocks.length ? Math.min(...blocks.map((n) => n.position.x)) : 0;
+    const top = blocks.length ? Math.min(...blocks.map((n) => n.position.y)) : 0;
+    let y = top;
+    const added = missing.map((table) => {
+      const node = newTableNode(table.name, table.schema, {
+        x: left - TABLE_NODE_WIDTH - TABLE_COLUMN_GAP,
+        y,
+      });
+      y += TABLE_NODE_HEADER_HEIGHT + table.columns.length * TABLE_NODE_ROW_HEIGHT + TABLE_NODE_SPACING;
+      return node;
+    });
+    set({ nodes: [...nodes, ...added] });
+    return added.length;
   },
 
   addGroup: () => {

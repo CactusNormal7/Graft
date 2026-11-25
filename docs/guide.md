@@ -180,28 +180,37 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
    `SELECT * FROM <table> LIMIT 100;` sur le canvas et l'exécute aussitôt.
    **Double-clic sur une colonne** insère `table.colonne` au curseur du bloc
    actif (le dernier éditeur focalisé — surligné dans la liste « Blocks »).
-5. **+ Group** (toolbar) crée un **conteneur coloré**. Fais glisser des blocs
+5. **Tables sur le canvas** : clic droit sur une table dans la sidebar →
+   **Add to canvas**, ou palette ⌘K / menu **View** → **Add referenced
+   tables to canvas** (ajoute à gauche des blocs toutes les tables que leur
+   SQL utilise). Chaque bloc est alors **relié en pointillé** aux tables qu'il
+   lit ou écrit (`FROM`, `JOIN`, `INSERT INTO`, `UPDATE`, `CREATE TABLE`,
+   `REFERENCES`, `ON` d'un index/trigger). Ces liens suivent le SQL tout seuls
+   et ne se suppriment pas à la main ; ils sont purement visuels. **✕** sur
+   une table la retire du canvas (la table elle-même n'est pas touchée) ;
+   double-clic sur son en-tête ouvre un bloc `SELECT`.
+6. **+ Group** (toolbar) crée un **conteneur coloré**. Fais glisser des blocs
    à l'intérieur pour les y attacher : déplacer le groupe déplace alors tous ses
    blocs. Sors un bloc du cadre pour le détacher. Le header du groupe permet de
    **renommer** (double-clic), **changer la couleur** (pastille) et **supprimer**
    le groupe (✕ — les blocs contenus sont conservés, seulement détachés).
    *(Suppression au clavier désactivée : utilise les boutons ✕ des blocs/groupes
    pour que les cascades — bloc résultat lié, détachement — s'exécutent.)*
-6. **▶ Run all** (toolbar) exécute tous les blocs dans l'ordre.
-7. **Déplace** les blocs librement, **relie-les** en tirant depuis le point de
+7. **▶ Run all** (toolbar) exécute tous les blocs dans l'ordre.
+8. **Déplace** les blocs librement, **relie-les** en tirant depuis le point de
    connexion droit vers le point gauche d'un autre bloc.
-8. **Pages (onglets type Excel)** : la barre en bas du canvas liste les pages,
+9. **Pages (onglets type Excel)** : la barre en bas du canvas liste les pages,
    chacune avec son propre canvas de blocs/groupes. **Clic** pour changer de
    page, **double-clic** pour renommer, **clic droit** pour supprimer, **+**
    pour en ajouter. Toutes les pages sont enregistrées dans le même `.graft`.
-9. **Save** (ou **⌘S / Ctrl+S**) → enregistre le projet (toutes les pages)
+10. **Save** (ou **⌘S / Ctrl+S**) → enregistre le projet (toutes les pages)
    dans son fichier `.graft` (JSON). Un **point orange** après le nom du projet
    (et « Save ● ») signale des **modifications non sauvegardées** — SQL,
    position/taille des blocs, pages, favoris… ; exécuter une requête n'en est
    pas une. Ouvrir ou créer un autre projet, fermer la fenêtre ou quitter
    l'app demande alors confirmation. Le clic sur **graft** (en haut à gauche)
    revient à l'accueil sans fermer le projet : **↩ Back to <projet>** y ramène.
-10. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
+11. Zoom via la toolbar (`−` / `+` / `⊞` pour ajuster) ou la molette ; **minimap**
    en bas à droite.
 
 ### Blocs favoris & sous-requêtes (`{{nom}}`)

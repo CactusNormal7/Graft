@@ -59,8 +59,9 @@ Un **bloc** est une unité de SQL posée sur le canvas. Six types prévus :
 | `view` | vue |
 | `script` | script SQL libre |
 
-Les blocs peuvent être **connectés** entre eux et (à terme) aux **objets de schéma**
-(tables, colonnes). C'est précisément pourquoi le canvas repose sur un vrai modèle
+Les blocs peuvent être **connectés** entre eux et aux **objets de schéma** : une
+table posée sur le canvas est reliée automatiquement aux blocs dont le SQL
+l'utilise (liens visuels dérivés du SQL, sans ordre d'exécution). C'est précisément pourquoi le canvas repose sur un vrai modèle
 de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
 
 ## Ce que Graft n'est PAS (non-goals)
@@ -97,8 +98,9 @@ de graphe nœuds/arêtes (React Flow) plutôt qu'un whiteboard de dessin libre.
   tables/colonnes, Ctrl/Cmd+Entrée), erreurs inline. 🔶 *en cours* (l'éditeur,
   la coloration et l'autocomplétion schéma SQLite sont en place).
 - **v0.3** — explorateur de schéma, connexions visuelles blocs ↔ tables,
-  support Postgres + MySQL. 🔶 *en cours* (Postgres + MySQL branchés, mots de
-  passe dans le trousseau de l'OS).
+  support Postgres + MySQL. ✅ *en place* (Postgres + MySQL branchés, mots de
+  passe dans le trousseau de l'OS, explorateur complet, tables posées sur le
+  canvas et reliées aux blocs qui les utilisent).
 - **v1.0** — UX canvas peaufinée (zoom, groupes, zones nommées), types de blocs
   différenciés, export de notebook, distribution desktop Tauri. *(Les groupes
   conteneurs et les pages existent déjà.)*

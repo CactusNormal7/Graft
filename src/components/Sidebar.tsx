@@ -70,6 +70,7 @@ export function Sidebar() {
   const focusedBlockId = useGraftStore((s) => s.focusedBlockId);
   const addSelectBlock = useGraftStore((s) => s.addSelectBlock);
   const openSqlBlock = useGraftStore((s) => s.openSqlBlock);
+  const addTableNode = useGraftStore((s) => s.addTableNode);
   const snippets = useGraftStore((s) => s.snippets);
   const insertSnippetRef = useGraftStore((s) => s.insertSnippetRef);
   const addBlockFromSnippet = useGraftStore((s) => s.addBlockFromSnippet);
@@ -105,6 +106,7 @@ export function Sidebar() {
     e.preventDefault();
     const actions: MenuAction[] = [
       { label: "SELECT * → new block", onClick: () => addSelectBlock(relation.name, relation.schema) },
+      { label: "Add to canvas", onClick: () => addTableNode(relation.name, relation.schema) },
       {
         label: "Insert name into focused block",
         onClick: () => insert(objectKey(relation)),

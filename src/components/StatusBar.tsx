@@ -7,9 +7,10 @@ export function StatusBar() {
   const schemaError = useGraftStore((s) => s.schemaError);
   const isConnected = connection !== null && schemaError === null;
   const nodes = useGraftStore((s) => s.nodes);
-  // Group containers are not blocks; count SQL + linked result blocks only.
-  const blockCount = nodes.filter((n) => n.type !== "group").length;
-  const resultCount = nodes.filter((n) => n.type !== "group" && n.data.result).length;
+  // Groups and table nodes are not blocks; count SQL + linked result blocks.
+  const blocks = nodes.filter((n) => n.type === "sqlBlock" || n.type === "resultBlock");
+  const blockCount = blocks.length;
+  const resultCount = blocks.filter((n) => n.data.result).length;
 
   return (
     <footer className="statusbar">

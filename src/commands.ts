@@ -6,6 +6,7 @@
 import { useMemo } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { useGraftStore } from "./store/useGraftStore";
+import { showMessage } from "./dialogs/appDialogs";
 import type { BlockType } from "./types";
 
 export interface AppCommand {
@@ -108,6 +109,20 @@ export function useAppCommands(): AppCommand[] {
         run: () => void store().runAll(),
       },
       ...newBlockCommands,
+      {
+        id: "canvas.addReferencedTables",
+        label: "Add referenced tables to canvas",
+        isEnabled: isCanvasShown,
+        run: () => {
+          if (store().addReferencedTables() === 0) {
+            void showMessage({
+              title: "No table to add",
+              message: "Every table referenced by the blocks of this page is already on the canvas (or none is referenced).",
+              tone: "info",
+            });
+          }
+        },
+      },
       { id: "group.new", label: "New group", isEnabled: isCanvasShown, run: () => store().addGroup() },
       { id: "page.new", label: "New page", isEnabled: isCanvasShown, run: () => store().addPage() },
       {
