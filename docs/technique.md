@@ -176,7 +176,7 @@ Graft/
     │   └── graft-core/       # moteur partagé app / serveur MCP, sans dépendance Tauri
     │       └── src/
     │           ├── db/       # moteurs SQLite / Postgres / MySQL — cf. § Connexions et moteurs
-    │           ├── inserts.rs # INSERT depuis un résultat (portage du chemin « plat » de orm.ts)
+    │           ├── inserts.rs # INSERT depuis un résultat (portage de orm.ts / resultShape.ts, parent → enfants compris)
     │           ├── files.rs  # E/S .graft : écriture atomique, règle « .graft uniquement », noms et chemins de projet
     │           ├── notebook.rs # lecture/édition des blocs d'un .graft en Rust (champs inconnus préservés) + expansion {{favoris}}
     │           ├── registry.rs # projets connus + autorisation d'écriture MCP par projet (hors du .graft)
@@ -1051,7 +1051,7 @@ ouverte**. `service.rs` porte la logique (testée sans le protocole),
 | `run_query` | **une** instruction, **lecture seule** |
 | `run_block` | SQL du bloc, `{{favoris}}` **expansés comme `runBlock`**, lecture seule |
 | `execute_write` | DML/DDL — **refusé** sauf si le projet l'autorise |
-| `generate_inserts` | INSERT reproduisant les lignes d'une requête/d'un bloc, table devinée comme `orm.ts` (portage du chemin « plat » uniquement, pas du parent → enfants) |
+| `generate_inserts` | INSERT reproduisant les lignes d'une requête/d'un bloc — portage Rust de `orm.ts` + `resultShape.ts` : parent → enfants (FK reliée par moteur) quand le résultat d'un JOIN s'y prête, sinon INSERT plats |
 | `explain_query` | `EXPLAIN QUERY PLAN` (SQLite) / `EXPLAIN` (Postgres, MySQL) — **jamais `ANALYZE`**, qui exécuterait la requête |
 
 - **Resources** : `graft://projects/<projet>/schema` (JSON) et
