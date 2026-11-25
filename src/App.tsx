@@ -9,12 +9,16 @@ import { PageTabs } from "./components/PageTabs";
 import { CommandPalette } from "./components/CommandPalette";
 import { GraftCanvas } from "./canvas/GraftCanvas";
 import { AppDialogHost } from "./dialogs/AppDialogHost";
+import { useMenuActions } from "./useMenuActions";
 
-function App() {
+function Screens() {
   const view = useGraftStore((s) => s.view);
   const saveNotebook = useGraftStore((s) => s.saveNotebook);
+  useMenuActions();
 
   // ⌘S / Ctrl+S saves the open project (also from inside a block editor).
+  // The native File ▸ Save accelerator usually consumes the key first; saving
+  // twice is harmless if both fire.
   useEffect(() => {
     if (view !== "canvas") return;
     const onKey = (e: KeyboardEvent) => {
@@ -37,18 +41,26 @@ function App() {
   }
 
   return (
-    <ReactFlowProvider>
-      <div className="app-shell">
-        <Toolbar />
-        <div className="app-body">
-          <Sidebar />
-          <GraftCanvas />
-        </div>
-        <PageTabs />
-        <StatusBar />
-        <CommandPalette />
-        <AppDialogHost />
+    <div className="app-shell">
+      <Toolbar />
+      <div className="app-body">
+        <Sidebar />
+        <GraftCanvas />
       </div>
+      <PageTabs />
+      <StatusBar />
+      <CommandPalette />
+      <AppDialogHost />
+    </div>
+  );
+}
+
+/** The provider wraps both screens so menu commands (zoom…) resolve the same
+ *  way whichever screen is shown. */
+function App() {
+  return (
+    <ReactFlowProvider>
+      <Screens />
     </ReactFlowProvider>
   );
 }

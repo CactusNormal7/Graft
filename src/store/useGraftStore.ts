@@ -184,6 +184,10 @@ interface GraftState {
   paletteOpen: boolean;
   setPaletteOpen: (open: boolean) => void;
 
+  /** Whether the "New project" modal is shown (home button or File menu). */
+  isNewProjectModalOpen: boolean;
+  setNewProjectModalOpen: (isOpen: boolean) => void;
+
   onNodesChange: (changes: NodeChange<AnyNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
@@ -561,8 +565,10 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   recentProjects: loadRecents(),
   dirty: false,
   paletteOpen: false,
+  isNewProjectModalOpen: false,
 
   setPaletteOpen: (open) => set({ paletteOpen: open }),
+  setNewProjectModalOpen: (isOpen) => set({ isNewProjectModalOpen: isOpen }),
 
   onNodesChange: (changes) =>
     set({ nodes: applyNodeChanges(changes, get().nodes) }),
@@ -1064,6 +1070,9 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     const { dbPath, nodes } = get();
     const node = nodes.find((n) => n.id === id);
     if (!node || !isSqlNode(node)) return;
+    // Already running: a second trigger (menu accelerator + editor keymap
+    // firing together, double click) must not execute the SQL twice.
+    if (node.data.status === "running") return;
 
     if (!dbPath) {
       set({

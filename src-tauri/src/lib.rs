@@ -1,6 +1,7 @@
 mod db;
 mod dialogs;
 mod lsp;
+mod menu;
 mod notebook;
 mod scope;
 
@@ -54,6 +55,8 @@ pub fn run() {
         .manage(FileScope::default())
         .manage(UnsavedChanges::default())
         .manage(lsp::LanguageServer::default())
+        .menu(menu::build)
+        .on_menu_event(|app, event| menu::forward_event(app, event.id().as_ref()))
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if has_unsaved_changes(window.app_handle()) {

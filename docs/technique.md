@@ -58,9 +58,10 @@ Graft cible une **application desktop classique**, pas un canvas plein écran :
 
 - **Barre latérale (sidebar)** : connexions, explorateur de schéma, navigation
   entre notebooks/vues.
-- **Barre de menus native** (Fichier, Édition, Affichage, Fenêtre…) via l'**API
-  Menu de Tauri**, rendue nativement sur **macOS** (menu bar système) et
-  **Windows** (menu de fenêtre).
+- **Barre de menus native** (File, Edit, View, Window + menu App sur macOS)
+  via l'**API Menu de Tauri**, rendue nativement sur **macOS** (menu bar
+  système) et **Windows** (menu de fenêtre) — implémentée, cf. § Barre de
+  menus native.
 - **Canvas** comme surface centrale parmi d'autres (console SQL, grille de
   données, diagrammes…), pas comme l'application entière.
 - **Décors de fenêtre** : natifs par défaut (Fluent sur Windows, traffic-light
@@ -116,6 +117,7 @@ Graft/
 │   ├── formatSql.ts          # formatage SQL (sql-formatter, dialecte du moteur, {{favoris}} préservés)
 │   ├── commands.ts           # commandes de l'app (useAppCommands) partagées palette / menus + SHORTCUTS
 │   ├── shortcuts.ts          # libellés de raccourcis par plateforme (⌘⇧F / Ctrl+Shift+F)
+│   ├── useMenuActions.ts     # exécute la commande de chaque clic de menu natif (événement `menu-action`)
 │   ├── paths.ts              # basename() cross-platform (sépare sur / et \)
 │   ├── native.ts             # dialogues natifs + confirmation + état « non sauvegardé » (commandes backend)
 │   ├── test/schema.ts        # fixtures de schéma partagées par les tests Vitest
@@ -175,7 +177,8 @@ Graft/
         ├── notebook.rs       # E/S fichiers (atomique, .graft only / chemins accordés), projets + tests
         ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
         ├── dialogs.rs        # dialogues natifs côté backend (fichiers, dossier, confirmation)
-        └── lsp.rs            # processus sql-language-server : résolution, framing LSP, pont IPC + tests
+        ├── lsp.rs            # processus sql-language-server : résolution, framing LSP, pont IPC + tests
+        └── menu.rs           # barre de menus native (File/Edit/View/Window + app macOS) → événement menu-action + tests
 ```
 
 ## Flux de données
@@ -331,6 +334,38 @@ génération d'INSERT, formatage, nom d'un favori (`askText`), suppression d'un
 favori (`askConfirm`, bouton danger). La confirmation « modifications non
 sauvegardées » reste un **dialogue natif** (`confirm_dialog`, comme la garde de
 fermeture côté Rust).
+
+### Barre de menus native (`src-tauri/src/menu.rs`)
+Construite avec l'API Menu de Tauri 2 au démarrage (`Builder::menu(menu::build)`) :
+
+| Menu | Contenu |
+|------|---------|
+| **Graft** (macOS seulement) | About, Services, Hide / Hide Others / Show All, Quit |
+| **File** | New Project… (⌘N / Ctrl+N), Open Project… (⌘O / Ctrl+O), New Block ▸ (6 types), New Group, New Page, Save (⌘S / Ctrl+S), Import Data File…, Home Screen (⌘⇧H / Ctrl+Shift+H) ; **Exit** en fin de menu hors macOS |
+| **Edit** | Undo, Redo, Cut, Copy, Paste, Select All (éléments prédéfinis — indispensables au presse-papiers du webview sur macOS), Run Block (⌘↵ / Ctrl+Enter), Run All Blocks (⌘⇧↵ / Ctrl+Shift+Enter), Format SQL (⇧⌥F / Shift+Alt+F) |
+| **View** | Command Palette… (⌘K / Ctrl+K), Zoom In / Out (⌘= / ⌘-), Fit Canvas (⌘0), Refresh Schema ; Enter Full Screen sur macOS |
+| **Window** | Minimize, Maximize/Zoom, Close Window ; sur macOS Bring All to Front + `set_as_windows_menu_for_nsapp` (liste des fenêtres gérée par le système) |
+
+- Les accélérateurs utilisent `CmdOrCtrl` → **Cmd sur macOS, Ctrl sur
+  Windows**. Pas de polissage spécifique Linux (il reçoit le menu Windows).
+- **Routage** : chaque élément personnalisé porte l'**id d'une commande
+  front** (`src/commands.ts`). `on_menu_event` → `menu::forward_event` émet
+  l'événement `menu-action` (payload = id) ; `useMenuActions` (monté dans
+  `App`, au-dessus des deux écrans) exécute la commande correspondante si elle
+  est active (`isEnabled` : les commandes du canvas sont inactives sur
+  l'accueil). La palette et le menu partagent donc exactement les mêmes
+  actions. « New Project… » ramène à l'accueil et ouvre la modale (état
+  `isNewProjectModalOpen` du store).
+- **Double déclenchement** : selon la plateforme, un accélérateur de menu et
+  l'écouteur clavier du webview (Mod-Enter de CodeMirror, ⌘S, ⌘K) peuvent
+  tous deux réagir. Les actions sont donc rendues sûres : `runBlock` ignore un
+  bloc déjà `running` (jamais deux exécutions d'un même SQL), sauvegarder deux
+  fois est inoffensif, la commande palette du menu *ouvre* (ne bascule pas).
+- **Tests** (`cargo test menu`) : ids et accélérateurs uniques, chaque id
+  existe dans `src/commands.ts`, chaque accélérateur y figure sous sa forme
+  `Mod+…` (`SHORTCUTS`) pour que palette et menu affichent le même raccourci.
+- Limite : l'état grisé des éléments n'est pas synchronisé avec le contexte
+  (un élément inactif ne fait simplement rien).
 
 ### Formatage SQL
 - `src/formatSql.ts` : `formatSql(sql, dbType)` s'appuie sur **`sql-formatter`**
@@ -851,4 +886,3 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 - Les arêtes entre blocs sont dessinables mais **purement visuelles** : aucune
   sémantique d'exécution (ordre/dépendances) — liée à la question ouverte de la
   granularité des blocs.
-- Pas encore de **barre de menus native**.

@@ -9,6 +9,8 @@ type PaletteItem =
   | { kind: "favorite"; snippet: Snippet };
 
 const SQL_PREVIEW_LENGTH = 70;
+/** Opening the palette from the palette makes no sense: not listed. */
+const PALETTE_COMMAND_ID = "view.palette";
 
 function matches(query: string, ...texts: string[]): boolean {
   return texts.some((text) => text.toLowerCase().includes(query));
@@ -58,6 +60,7 @@ export function CommandPalette() {
   const items = useMemo<PaletteItem[]>(() => {
     const q = query.trim().toLowerCase();
     const commandItems: PaletteItem[] = commands
+      .filter((command) => command.id !== PALETTE_COMMAND_ID)
       .filter((command) => command.isEnabled() && (!q || matches(q, command.label)))
       .map((command) => ({ kind: "command", command }));
     const favoriteItems: PaletteItem[] = snippets

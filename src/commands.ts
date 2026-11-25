@@ -32,10 +32,19 @@ export const SHORTCUTS = {
   runBlock: "Mod+Enter",
   save: "Mod+S",
   palette: "Mod+K",
+  newProject: "Mod+N",
+  openProject: "Mod+O",
+  runAll: "Mod+Shift+Enter",
+  home: "Mod+Shift+H",
+  zoomIn: "Mod+=",
+  zoomOut: "Mod+-",
+  fitView: "Mod+0",
 } as const;
 
+const FIT_VIEW_DURATION_MS = 200;
 const always = () => true;
-const hasFocusedBlock = () => useGraftStore.getState().focusedBlockId !== null;
+const isCanvasShown = () => useGraftStore.getState().view === "canvas";
+const hasFocusedBlock = () => isCanvasShown() && useGraftStore.getState().focusedBlockId !== null;
 
 export function useAppCommands(): AppCommand[] {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
@@ -45,10 +54,35 @@ export function useAppCommands(): AppCommand[] {
     const newBlockCommands: AppCommand[] = BLOCK_TYPES.map((type) => ({
       id: `block.new.${type}`,
       label: `New ${type} block`,
-      isEnabled: always,
+      isEnabled: isCanvasShown,
       run: () => store().addBlock(type),
     }));
+    // Canvas-only commands are disabled on the home screen (no project shown).
     return [
+      {
+        id: "project.new",
+        label: "New project…",
+        shortcut: SHORTCUTS.newProject,
+        isEnabled: always,
+        run: () => {
+          store().goHome();
+          store().setNewProjectModalOpen(true);
+        },
+      },
+      {
+        id: "project.open",
+        label: "Open project…",
+        shortcut: SHORTCUTS.openProject,
+        isEnabled: always,
+        run: () => void store().openProjectFromDialog(),
+      },
+      {
+        id: "view.palette",
+        label: "Command palette",
+        shortcut: SHORTCUTS.palette,
+        isEnabled: isCanvasShown,
+        run: () => store().setPaletteOpen(true),
+      },
       {
         id: "sql.format",
         label: "Format SQL",
@@ -69,40 +103,60 @@ export function useAppCommands(): AppCommand[] {
       {
         id: "block.runAll",
         label: "Run all blocks",
-        isEnabled: always,
+        shortcut: SHORTCUTS.runAll,
+        isEnabled: isCanvasShown,
         run: () => void store().runAll(),
       },
       ...newBlockCommands,
-      { id: "group.new", label: "New group", isEnabled: always, run: () => store().addGroup() },
-      { id: "page.new", label: "New page", isEnabled: always, run: () => store().addPage() },
+      { id: "group.new", label: "New group", isEnabled: isCanvasShown, run: () => store().addGroup() },
+      { id: "page.new", label: "New page", isEnabled: isCanvasShown, run: () => store().addPage() },
       {
         id: "project.save",
         label: "Save project",
         shortcut: SHORTCUTS.save,
-        isEnabled: always,
+        isEnabled: isCanvasShown,
         run: () => void store().saveNotebook(),
       },
       {
         id: "data.import",
         label: "Import data file…",
-        isEnabled: always,
+        isEnabled: isCanvasShown,
         run: () => void store().importDataFile(),
       },
       {
         id: "schema.refresh",
         label: "Refresh schema",
-        isEnabled: always,
+        isEnabled: isCanvasShown,
         run: () => void store().refreshSchema(),
       },
-      { id: "view.zoomIn", label: "Zoom in", isEnabled: always, run: () => void zoomIn() },
-      { id: "view.zoomOut", label: "Zoom out", isEnabled: always, run: () => void zoomOut() },
+      {
+        id: "view.zoomIn",
+        label: "Zoom in",
+        shortcut: SHORTCUTS.zoomIn,
+        isEnabled: isCanvasShown,
+        run: () => void zoomIn(),
+      },
+      {
+        id: "view.zoomOut",
+        label: "Zoom out",
+        shortcut: SHORTCUTS.zoomOut,
+        isEnabled: isCanvasShown,
+        run: () => void zoomOut(),
+      },
       {
         id: "view.fit",
         label: "Fit canvas to window",
-        isEnabled: always,
-        run: () => void fitView({ duration: 200 }),
+        shortcut: SHORTCUTS.fitView,
+        isEnabled: isCanvasShown,
+        run: () => void fitView({ duration: FIT_VIEW_DURATION_MS }),
       },
-      { id: "app.home", label: "Go to home screen", isEnabled: always, run: () => store().goHome() },
+      {
+        id: "app.home",
+        label: "Go to home screen",
+        shortcut: SHORTCUTS.home,
+        isEnabled: isCanvasShown,
+        run: () => store().goHome(),
+      },
     ];
   }, [zoomIn, zoomOut, fitView]);
 }

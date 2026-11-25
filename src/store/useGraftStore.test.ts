@@ -149,3 +149,21 @@ describe("formatting", () => {
     });
   });
 });
+
+describe("running blocks", () => {
+  beforeEach(async () => {
+    files.clear();
+    writeProject("/p/r.graft", "r");
+    await store.getState().openProjectByPath("/p/r.graft");
+  });
+
+  it("ignores a second run while the block is already running", async () => {
+    store.getState().addBlock("query");
+    const id = store.getState().nodes[0].id;
+    invoke.mockClear();
+    const first = store.getState().runBlock(id);
+    const second = store.getState().runBlock(id);
+    await Promise.all([first, second]);
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === "execute_sql")).toHaveLength(1);
+  });
+});

@@ -230,6 +230,26 @@ Les tables sont devinées à partir du **schéma en cache** (colonnes + clés
 mapping choisi, les colonnes ignorées et les FK manquantes — vérifie-les avant
 d'exécuter.
 
+### Barre de menus
+Graft a une vraie barre de menus (barre système sur macOS, menu de fenêtre
+sur Windows). Raccourcis : **Cmd** sur macOS, **Ctrl** sur Windows.
+
+| Action | macOS | Windows |
+|--------|-------|---------|
+| Nouveau projet | ⌘N | Ctrl+N |
+| Ouvrir un projet | ⌘O | Ctrl+O |
+| Enregistrer | ⌘S | Ctrl+S |
+| Exécuter le bloc | ⌘↵ | Ctrl+Enter |
+| Exécuter tous les blocs | ⌘⇧↵ | Ctrl+Shift+Enter |
+| Formater le SQL | ⇧⌥F | Shift+Alt+F |
+| Palette de commandes | ⌘K | Ctrl+K |
+| Zoom + / − / ajuster | ⌘= / ⌘- / ⌘0 | Ctrl+= / Ctrl+- / Ctrl+0 |
+| Accueil | ⌘⇧H | Ctrl+Shift+H |
+
+**File ▸ New Block** crée un bloc de chaque type ; **New Group**, **New Page**,
+**Import Data File…** et **View ▸ Refresh Schema** reprennent les boutons de
+la toolbar. Les actions du canvas sont sans effet sur l'écran d'accueil.
+
 ### Navigation sur le canvas
 - **Déplacer la vue** : glisser le fond, ou **deux doigts au trackpad** (scroll).
 - **Zoom** : **pincement** (trackpad), ou les contrôles en bas à gauche.
@@ -256,6 +276,4 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
   schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées + LSP
   optionnel + formatage).
 - Seul **SQLite** est supporté (Postgres/MySQL en v0.3).
-- Pas encore de **barre de menus native** (Fichier / Édition / Affichage /
-  Fenêtre) : tout passe par la toolbar et les raccourcis.
 - Les liens entre blocs sont visuels uniquement (pas d'ordre d'exécution).

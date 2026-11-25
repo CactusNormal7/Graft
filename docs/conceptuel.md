@@ -43,8 +43,8 @@ classique), pas seulement un canvas plein écran :
 - le canvas comme **surface centrale** parmi d'autres vues, pas comme l'app entière.
 
 > La coquille v0.1 (toolbar + sidebar + canvas + onglets de pages + barre de
-> statut, écran d'accueil) est en place, d'après le wireframe Claude Design. La
-> **barre de menus native** reste à faire.
+> statut, écran d'accueil, barre de menus native) est en place, d'après le
+> wireframe Claude Design.
 
 ## Le modèle de blocs
 

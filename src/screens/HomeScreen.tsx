@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useGraftStore } from "../store/useGraftStore";
 import { NewProjectModal } from "../components/NewProjectModal";
 import type { RecentProject } from "../types";
@@ -27,7 +26,8 @@ export function HomeScreen() {
   const dirty = useGraftStore((s) => s.dirty);
   const resumeProject = useGraftStore((s) => s.resumeProject);
 
-  const [showNew, setShowNew] = useState(false);
+  const isNewProjectModalOpen = useGraftStore((s) => s.isNewProjectModalOpen);
+  const setNewProjectModalOpen = useGraftStore((s) => s.setNewProjectModalOpen);
 
   return (
     <div className="app-shell">
@@ -35,7 +35,7 @@ export function HomeScreen() {
         {/* Sidebar */}
         <aside className="sidebar">
           <div className="toolbar__brand" style={{ marginBottom: "4px" }}>graft</div>
-          <button className="btn-accent" style={{ textAlign: "center" }} onClick={() => setShowNew(true)}>
+          <button className="btn-accent" style={{ textAlign: "center" }} onClick={() => setNewProjectModalOpen(true)}>
             + New project
           </button>
           <button className="btn" style={{ textAlign: "center" }} onClick={openProjectFromDialog}>
@@ -77,7 +77,7 @@ export function HomeScreen() {
                 {dirty && " ●"}
               </button>
             )}
-            <button className="btn-accent" style={{ fontSize: "12px", padding: "7px 20px" }} onClick={() => setShowNew(true)}>
+            <button className="btn-accent" style={{ fontSize: "12px", padding: "7px 20px" }} onClick={() => setNewProjectModalOpen(true)}>
               + New project
             </button>
             <button className="btn" style={{ fontSize: "12px", padding: "7px 20px" }} onClick={openProjectFromDialog}>
@@ -92,7 +92,7 @@ export function HomeScreen() {
         </main>
       </div>
 
-      {showNew && <NewProjectModal onClose={() => setShowNew(false)} />}
+      {isNewProjectModalOpen && <NewProjectModal onClose={() => setNewProjectModalOpen(false)} />}
     </div>
   );
 }
