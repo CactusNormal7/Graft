@@ -16,6 +16,11 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 /// Event carrying the id of the clicked menu item to the webview.
 pub const MENU_EVENT: &str = "menu-action";
 
+/// "Close Window", handled natively. Custom rather than the predefined item,
+/// whose fixed CmdOrCtrl+W accelerator would steal "Close Page".
+const CLOSE_WINDOW_ID: &str = "window.close";
+const CLOSE_WINDOW_ACCELERATOR: &str = "CmdOrCtrl+Shift+W";
+
 /// A custom menu item bound to a frontend command.
 pub struct CommandItem {
     pub id: &'static str,
@@ -42,6 +47,7 @@ pub const FILE_NEW_BLOCK: &[CommandItem] = &[
 pub const FILE_CANVAS: &[CommandItem] = &[
     item("group.new", "New Group", None),
     item("page.new", "New Page", None),
+    item("page.close", "Close Page", Some("CmdOrCtrl+W")),
 ];
 pub const FILE_SAVE: &[CommandItem] = &[item("project.save", "Save", Some("CmdOrCtrl+S"))];
 pub const FILE_DATA: &[CommandItem] = &[item("data.import", "Import Data File…", None)];
@@ -164,11 +170,13 @@ fn view_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
 }
 
 fn window_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Submenu<R>> {
+    let close_window =
+        MenuItem::with_id(app, CLOSE_WINDOW_ID, "Close Window", true, Some(CLOSE_WINDOW_ACCELERATOR))?;
     let builder = SubmenuBuilder::new(app, "Window")
         .minimize()
         .maximize()
         .separator()
-        .close_window();
+        .item(&close_window);
     #[cfg(target_os = "macos")]
     let builder = builder.separator().bring_all_to_front();
     let menu = builder.build()?;
@@ -207,10 +215,25 @@ pub fn set_menu_states<R: Runtime>(
     Ok(())
 }
 
-/// Forward a click on a custom item to the webview; predefined items (copy,
-/// quit…) are handled natively and never reach here with a command id.
+/// Close the focused window. Goes through `CloseRequested`, so the
+/// unsaved-changes guard still applies.
+fn close_focused_window<R: Runtime>(app: &AppHandle<R>) {
+    let Some(window) = app.webview_windows().into_values().find(|w| w.is_focused().unwrap_or(false))
+    else {
+        return;
+    };
+    if let Err(err) = window.close() {
+        eprintln!("menu: could not close the window: {err}");
+    }
+}
+
+/// Handle a click on a custom item: "Close Window" natively, the others are
+/// forwarded to the webview. Predefined items (copy, quit…) are handled by the
+/// OS and never reach here with a command id.
 pub fn forward_event<R: Runtime>(app: &AppHandle<R>, id: &str) {
-    if is_command_id(id) {
+    if id == CLOSE_WINDOW_ID {
+        close_focused_window(app);
+    } else if is_command_id(id) {
         if let Err(err) = app.emit(MENU_EVENT, id) {
             eprintln!("menu: could not forward {id}: {err}");
         }
@@ -236,6 +259,8 @@ mod tests {
                 assert!(accelerators.insert(accelerator), "duplicate {accelerator}");
             }
         }
+        assert!(!ids.contains(CLOSE_WINDOW_ID));
+        assert!(!accelerators.contains(CLOSE_WINDOW_ACCELERATOR));
     }
 
     /// Every menu item must run a frontend command, or its click does nothing.

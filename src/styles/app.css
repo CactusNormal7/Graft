@@ -1425,19 +1425,46 @@ button {
 }
 
 .page-tabs__tab {
-  background: none;
-  border: none;
+  display: flex;
+  align-items: center;
   border-top: 2px solid transparent;
   color: var(--muted);
+  max-width: 220px;
+}
+
+.page-tabs__name {
+  background: none;
+  border: none;
+  color: inherit;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  padding: 4px 12px;
+  padding: 4px 4px 4px 12px;
   cursor: pointer;
   white-space: nowrap;
-  max-width: 200px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Close "×": shown on the active tab and on hover, like browser tabs. */
+.page-tabs__close {
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  font-size: var(--text-xs);
+  line-height: 1;
+  padding: 2px 4px;
+  margin-right: 6px;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.page-tabs__tab:hover .page-tabs__close,
+.page-tabs__tab.is-active .page-tabs__close,
+.page-tabs__close:focus-visible { visibility: visible; }
+
+.page-tabs__close:hover { color: var(--text); background: var(--border); }
 
 .page-tabs__tab:hover { color: var(--text-2); background: var(--panel-2); }
 

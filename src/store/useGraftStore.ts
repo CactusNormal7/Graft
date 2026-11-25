@@ -239,6 +239,8 @@ interface GraftState {
   addPage: () => void;
   renamePage: (id: string, name: string) => void;
   deletePage: (id: string) => void;
+  /** Delete a page after confirming when it is not empty; never the last one. */
+  closePage: (id: string) => Promise<void>;
   switchPage: (id: string) => void;
 
   // --- Favorites / snippets ---
@@ -763,6 +765,24 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     } else {
       set({ pages });
     }
+  },
+
+  closePage: async (id) => {
+    const state = get();
+    if (state.pages.length <= 1) return;
+    const page = state.pages.find((p) => p.id === id);
+    if (!page) return;
+    const nodeCount = id === state.activePageId ? state.nodes.length : page.nodes.length;
+    if (nodeCount > 0) {
+      const isConfirmed = await askConfirm({
+        title: `Close "${page.name}"?`,
+        message: `This page and its ${nodeCount} item(s) are removed from the project.`,
+        okLabel: "Close page",
+        isDanger: true,
+      });
+      if (!isConfirmed) return;
+    }
+    get().deletePage(id);
   },
 
   switchPage: (id) => {

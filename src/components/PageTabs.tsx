@@ -5,7 +5,7 @@ import { BlockContextMenu, type MenuAction } from "../canvas/BlockContextMenu";
 /**
  * Excel-like sheet tabs at the bottom of the canvas. Each tab is a page with
  * its own nodes/edges. Click to switch, double-click to rename, right-click for
- * a menu (rename / delete), and "+" adds a page.
+ * a menu (rename / delete), "×" (or Mod+W) closes a page, and "+" adds one.
  */
 export function PageTabs() {
   const pages = useGraftStore((s) => s.pages);
@@ -14,6 +14,8 @@ export function PageTabs() {
   const addPage = useGraftStore((s) => s.addPage);
   const renamePage = useGraftStore((s) => s.renamePage);
   const deletePage = useGraftStore((s) => s.deletePage);
+  const closePage = useGraftStore((s) => s.closePage);
+  const canClose = pages.length > 1;
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -65,16 +67,30 @@ export function PageTabs() {
             }}
           />
         ) : (
-          <button
+          <div
             key={p.id}
             className={`page-tabs__tab${active ? " is-active" : ""}`}
-            onClick={() => switchPage(p.id)}
-            onDoubleClick={() => startRename(p.id, p.name)}
             onContextMenu={(e) => openMenu(e, p.id, p.name)}
-            title={p.name}
           >
-            {p.name}
-          </button>
+            <button
+              className="page-tabs__name"
+              onClick={() => switchPage(p.id)}
+              onDoubleClick={() => startRename(p.id, p.name)}
+              title={p.name}
+            >
+              {p.name}
+            </button>
+            {canClose && (
+              <button
+                className="page-tabs__close"
+                onClick={() => void closePage(p.id)}
+                title="Close page"
+                aria-label={`Close ${p.name}`}
+              >
+                ×
+              </button>
+            )}
+          </div>
         );
       })}
       <button className="page-tabs__add" onClick={addPage} title="Add page">

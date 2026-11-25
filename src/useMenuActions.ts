@@ -51,9 +51,15 @@ export function useMenuActions() {
       );
     };
     sync();
-    // Enabled states depend on the screen and on the focused block only.
+    // Enabled states depend on the screen, the focused block and the page count only.
     return useGraftStore.subscribe((state, prev) => {
-      if (state.view !== prev.view || state.focusedBlockId !== prev.focusedBlockId) sync();
+      if (
+        state.view !== prev.view ||
+        state.focusedBlockId !== prev.focusedBlockId ||
+        state.pages.length !== prev.pages.length
+      ) {
+        sync();
+      }
     });
   }, [commands]);
 }

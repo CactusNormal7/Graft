@@ -43,6 +43,14 @@ const { useDialogStore } = await import("../dialogs/appDialogs");
 const store = useGraftStore;
 const unsaved = () => hasUnsavedChanges(store.getState());
 
+/** Answer the single pending in-app confirm dialog. */
+async function answerDialog(confirmed: boolean) {
+  await vi.waitFor(() => expect(useDialogStore.getState().queue.length).toBe(1));
+  const request = useDialogStore.getState().queue[0];
+  if (request.kind !== "confirm") throw new Error("expected a confirm dialog");
+  request.resolve(confirmed);
+}
+
 function writeProject(path: string, name: string) {
   files.set(
     path,
@@ -266,13 +274,6 @@ describe("changes made outside the app", () => {
     stamps.set(path, (stamps.get(path) ?? 0) + 1);
   }
 
-  async function answerDialog(confirmed: boolean) {
-    await vi.waitFor(() => expect(useDialogStore.getState().queue.length).toBe(1));
-    const request = useDialogStore.getState().queue[0];
-    if (request.kind !== "confirm") throw new Error("expected a confirm dialog");
-    request.resolve(confirmed);
-  }
-
   beforeEach(async () => {
     files.clear();
     useDialogStore.setState({ queue: [] });
@@ -317,5 +318,40 @@ describe("changes made outside the app", () => {
     expect(useDialogStore.getState().queue).toHaveLength(0);
     await store.getState().checkProjectFile();
     expect(useDialogStore.getState().queue).toHaveLength(0);
+  });
+});
+
+describe("closing pages", () => {
+  beforeEach(async () => {
+    files.clear();
+    useDialogStore.setState({ queue: [] });
+    writeProject("/p/c.graft", "c");
+    await store.getState().openProjectByPath("/p/c.graft");
+    store.getState().addPage(); // two pages, the new empty one active
+  });
+
+  it("closes an empty page without asking, but never the last one", async () => {
+    const [first, second] = store.getState().pages;
+    await store.getState().closePage(second.id);
+    expect(store.getState().pages.map((p) => p.id)).toEqual([first.id]);
+    expect(useDialogStore.getState().queue).toHaveLength(0);
+
+    await store.getState().closePage(first.id);
+    expect(store.getState().pages).toHaveLength(1);
+  });
+
+  it("asks before closing a page that has content", async () => {
+    store.getState().addBlock("query");
+    const pageId = store.getState().activePageId;
+
+    const refused = store.getState().closePage(pageId);
+    await answerDialog(false);
+    await refused;
+    expect(store.getState().pages).toHaveLength(2);
+
+    const accepted = store.getState().closePage(pageId);
+    await answerDialog(true);
+    await accepted;
+    expect(store.getState().pages.map((p) => p.id)).not.toContain(pageId);
   });
 });

@@ -207,7 +207,12 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
 9. **Pages (onglets type Excel)** : la barre en bas du canvas liste les pages,
    chacune avec son propre canvas de blocs/groupes. **Clic** pour changer de
    page, **double-clic** pour renommer, **clic droit** pour supprimer, **+**
-   pour en ajouter. Toutes les pages sont enregistrées dans le même `.graft`.
+   pour en ajouter. La petite **×** d'un onglet (visible au survol et sur la
+   page active) ou **⌘W / Ctrl+W** **ferment la page** — elle est retirée du
+   projet, avec confirmation si elle contient des blocs ; la dernière page ne
+   se ferme pas. ⌘W / Ctrl+W ne ferme **jamais** l'application : la fenêtre se
+   ferme avec **⌘⇧W / Ctrl+Shift+W** (Window ▸ Close Window). Toutes les pages
+   sont enregistrées dans le même `.graft`.
 10. **Save** (ou **⌘S / Ctrl+S**) → enregistre le projet (toutes les pages)
    dans son fichier `.graft` (JSON). Un **point orange** après le nom du projet
    (et « Save ● ») signale des **modifications non sauvegardées** — SQL,
@@ -280,6 +285,8 @@ sur Windows). Raccourcis : **Cmd** sur macOS, **Ctrl** sur Windows.
 | Palette de commandes | ⌘K | Ctrl+K |
 | Zoom + / − / ajuster | ⌘= / ⌘- / ⌘0 | Ctrl+= / Ctrl+- / Ctrl+0 |
 | Accueil | ⌘⇧H | Ctrl+Shift+H |
+| Fermer la page | ⌘W | Ctrl+W |
+| Fermer la fenêtre | ⌘⇧W | Ctrl+Shift+W |
 
 **File ▸ New Block** crée un bloc de chaque type ; **New Group**, **New Page**,
 **Import Data File…** et **View ▸ Refresh Schema** reprennent les boutons de

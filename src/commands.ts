@@ -41,11 +41,13 @@ export const SHORTCUTS = {
   zoomIn: "Mod+=",
   zoomOut: "Mod+-",
   fitView: "Mod+0",
+  closePage: "Mod+W",
 } as const;
 
 const FIT_VIEW_DURATION_MS = 200;
 const always = () => true;
 const isCanvasShown = () => useGraftStore.getState().view === "canvas";
+const canClosePage = () => isCanvasShown() && useGraftStore.getState().pages.length > 1;
 const hasFocusedBlock = () => isCanvasShown() && useGraftStore.getState().focusedBlockId !== null;
 
 /** Register the bundled graft-mcp server in Claude Desktop's configuration. */
@@ -150,6 +152,13 @@ export function useAppCommands(): AppCommand[] {
       },
       { id: "group.new", label: "New group", isEnabled: isCanvasShown, run: () => store().addGroup() },
       { id: "page.new", label: "New page", isEnabled: isCanvasShown, run: () => store().addPage() },
+      {
+        id: "page.close",
+        label: "Close page",
+        shortcut: SHORTCUTS.closePage,
+        isEnabled: canClosePage,
+        run: () => void store().closePage(store().activePageId),
+      },
       {
         id: "project.save",
         label: "Save project",

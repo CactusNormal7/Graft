@@ -479,10 +479,10 @@ Construite avec l'API Menu de Tauri 2 au démarrage (`Builder::menu(menu::build)
 | Menu | Contenu |
 |------|---------|
 | **Graft** (macOS seulement) | About, Services, Hide / Hide Others / Show All, Quit |
-| **File** | New Project… (⌘N / Ctrl+N), Open Project… (⌘O / Ctrl+O), New Block ▸ (6 types), New Group, New Page, Save (⌘S / Ctrl+S), Import Data File…, Home Screen (⌘⇧H / Ctrl+Shift+H) ; **Exit** en fin de menu hors macOS |
+| **File** | New Project… (⌘N / Ctrl+N), Open Project… (⌘O / Ctrl+O), New Block ▸ (6 types), New Group, New Page, Close Page (⌘W / Ctrl+W), Save (⌘S / Ctrl+S), Import Data File…, Home Screen (⌘⇧H / Ctrl+Shift+H) ; **Exit** en fin de menu hors macOS |
 | **Edit** | Undo, Redo, Cut, Copy, Paste, Select All (éléments prédéfinis — indispensables au presse-papiers du webview sur macOS), Run Block (⌘↵ / Ctrl+Enter), Run All Blocks (⌘⇧↵ / Ctrl+Shift+Enter), Format SQL (⇧⌥F / Shift+Alt+F) |
 | **View** | Command Palette… (⌘K / Ctrl+K), Zoom In / Out (⌘= / ⌘-), Fit Canvas (⌘0), Refresh Schema ; Enter Full Screen sur macOS |
-| **Window** | Minimize, Maximize/Zoom, Close Window ; sur macOS Bring All to Front + `set_as_windows_menu_for_nsapp` (liste des fenêtres gérée par le système) |
+| **Window** | Minimize, Maximize/Zoom, Close Window (⌘⇧W / Ctrl+Shift+W — élément **personnalisé** `window.close`, traité côté Rust : le prédéfini `close_window` impose ⌘W / Ctrl+W, réservé à Close Page ; la fermeture passe par `CloseRequested`, donc la garde « modifications non enregistrées » s'applique) ; sur macOS Bring All to Front + `set_as_windows_menu_for_nsapp` (liste des fenêtres gérée par le système) |
 
 - Les accélérateurs utilisent `CmdOrCtrl` → **Cmd sur macOS, Ctrl sur
   Windows**. Pas de polissage spécifique Linux (il reçoit le menu Windows).
@@ -505,7 +505,8 @@ Construite avec l'API Menu de Tauri 2 au démarrage (`Builder::menu(menu::build)
 - **État grisé synchronisé** : `menu::build` garde les poignées des éléments
   (`CommandMenuItems`) ; `useMenuActions` envoie `set_menu_states`
   (`{ id: enabled }`, d'après `isEnabled` des commandes) au démarrage et à
-  chaque changement d'écran ou de bloc focalisé, seulement si l'état a changé.
+  chaque changement d'écran, de bloc focalisé ou de nombre de pages, seulement
+  si l'état a changé.
   Ex. : sur l'accueil, Save, New Group, Run Block… sont grisés.
 - **Course clavier atténuée** : les commandes qui lisent le texte de
   l'éditeur (`block.run`, `block.runAll`, `sql.format` — `EDITOR_COMMANDS`)
