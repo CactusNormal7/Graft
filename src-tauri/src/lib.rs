@@ -1,4 +1,5 @@
 mod claude_desktop;
+mod connection_commands;
 mod db_commands;
 mod dialogs;
 mod lsp;
@@ -95,6 +96,9 @@ pub fn run() {
             menu::set_menu_states,
             registry_commands::register_project,
             claude_desktop::install_claude_desktop,
+            connection_commands::list_saved_connections,
+            connection_commands::save_connection,
+            connection_commands::delete_saved_connection,
             registry_commands::get_mcp_writes,
             registry_commands::set_mcp_writes,
             lsp::lsp_start,

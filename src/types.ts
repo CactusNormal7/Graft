@@ -137,6 +137,13 @@ export interface TableNodeData {
   [key: string]: unknown;
 }
 
+/** A named connection from the local library, reusable across projects
+ *  (mirrors the Rust `SavedConnection`). */
+export interface SavedConnection {
+  name: string;
+  connection: ConnectionConfig;
+}
+
 /** One column of a table/view, as introspected from the database. */
 export interface ColumnInfo {
   name: string;

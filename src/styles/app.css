@@ -1786,6 +1786,9 @@ button {
 .modal {
   width: 460px;
   max-width: calc(100vw - 48px);
+  /* The connection form can outgrow a small window: scroll inside. */
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-xl);

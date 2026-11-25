@@ -39,6 +39,7 @@ import type {
   QueryResult,
   RecentProject,
   ResultBlockData,
+  SavedConnection,
   SchemaObjects,
   SchemaSnapshot,
   ResultView,
@@ -210,7 +211,17 @@ interface GraftState {
 
   /** Whether the "New project" modal is shown (home button or File menu). */
   isNewProjectModalOpen: boolean;
-  setNewProjectModalOpen: (isOpen: boolean) => void;
+  /** Connection the "New project" modal starts from (a saved connection). */
+  newProjectConnection: ConnectionConfig | null;
+  setNewProjectModalOpen: (isOpen: boolean, connection?: ConnectionConfig | null) => void;
+
+  /** Named connections of the local library, reusable across projects. */
+  savedConnections: SavedConnection[];
+  loadSavedConnections: () => Promise<void>;
+  /** Add (or update, same id) a named connection in the library. */
+  saveNamedConnection: (name: string, connection: ConnectionConfig) => Promise<void>;
+  /** Remove a named connection (its keychain password is kept). */
+  deleteSavedConnection: (id: string) => Promise<void>;
 
   onNodesChange: (changes: NodeChange<AnyNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
@@ -710,9 +721,33 @@ export const useGraftStore = create<GraftState>((set, get) => ({
   dirty: false,
   paletteOpen: false,
   isNewProjectModalOpen: false,
+  newProjectConnection: null,
+  savedConnections: [],
 
   setPaletteOpen: (open) => set({ paletteOpen: open }),
-  setNewProjectModalOpen: (isOpen) => set({ isNewProjectModalOpen: isOpen }),
+  setNewProjectModalOpen: (isOpen, connection = null) =>
+    set({ isNewProjectModalOpen: isOpen, newProjectConnection: isOpen ? connection : null }),
+
+  loadSavedConnections: async () => {
+    try {
+      set({ savedConnections: await invoke<SavedConnection[]>("list_saved_connections") });
+    } catch (err) {
+      void showError("Could not read the saved connections", String(err));
+    }
+  },
+
+  saveNamedConnection: async (name, connection) => {
+    const savedConnections = await invoke<SavedConnection[]>("save_connection", { name, connection });
+    set({ savedConnections });
+  },
+
+  deleteSavedConnection: async (id) => {
+    try {
+      set({ savedConnections: await invoke<SavedConnection[]>("delete_saved_connection", { id }) });
+    } catch (err) {
+      void showError("Could not remove the saved connection", String(err));
+    }
+  },
 
   onNodesChange: (changes) =>
     set({ nodes: applyNodeChanges(changes, get().nodes) }),

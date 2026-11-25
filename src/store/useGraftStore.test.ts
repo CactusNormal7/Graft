@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const files = new Map<string, string>();
 const stamps = new Map<string, number>();
 const passwords = new Map<string, string>();
+const savedConnections: unknown[] = [];
 const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
   switch (cmd) {
     case "load_notebook":
@@ -19,6 +20,11 @@ const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
       return { tables: [], triggers: [], routines: [] };
     case "register_project":
       return null;
+    case "save_connection":
+      savedConnections.push({ name: args!.name, connection: args!.connection });
+      return [...savedConnections];
+    case "list_saved_connections":
+      return [...savedConnections];
     case "set_connection_password":
       passwords.set(args!.connectionId as string, args!.password as string);
       return null;
@@ -317,5 +323,18 @@ describe("changes made outside the app", () => {
     expect(useDialogStore.getState().queue).toHaveLength(0);
     await store.getState().checkProjectFile();
     expect(useDialogStore.getState().queue).toHaveLength(0);
+  });
+});
+
+describe("saved connections", () => {
+  it("adds a named connection to the library and lets a new project start from it", async () => {
+    const connection = { id: "conn-shared", engine: "postgres" as const, host: "db", user: "ada" };
+    await store.getState().saveNamedConnection("Prod", connection);
+    expect(store.getState().savedConnections).toEqual([{ name: "Prod", connection }]);
+
+    store.getState().setNewProjectModalOpen(true, connection);
+    expect(store.getState().newProjectConnection).toEqual(connection);
+    store.getState().setNewProjectModalOpen(false);
+    expect(store.getState().newProjectConnection).toBeNull();
   });
 });

@@ -72,6 +72,10 @@ function Screens() {
 /** The provider wraps both screens so menu commands (zoom…) resolve the same
  *  way whichever screen is shown. */
 function App() {
+  useEffect(() => {
+    void useGraftStore.getState().loadSavedConnections();
+  }, []);
+
   return (
     <ReactFlowProvider>
       <Screens />

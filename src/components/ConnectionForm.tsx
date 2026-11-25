@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { pickSqliteFile } from "../native";
 import { DEFAULT_PORT, ENGINE_LABEL, connectionProblem, isServerEngine } from "../connection";
 import { errorMessage } from "./sqlDiagnostics";
-import type { ConnectionConfig, DbType, SslMode } from "../types";
+import type { ConnectionConfig, DbType, SavedConnection, SslMode } from "../types";
 
 const ENGINES: DbType[] = ["sqlite", "postgres", "mysql"];
 
@@ -13,6 +13,26 @@ const SSL_MODES: { value: SslMode; label: string }[] = [
   { value: "require", label: "Require" },
   { value: "verify-full", label: "Verify" },
 ];
+
+/** Whether the keychain holds a password for this (server) connection —
+ *  e.g. after picking a saved connection. */
+export function useStoredPassword(connection: ConnectionConfig): boolean {
+  const [hasStoredPassword, setHasStoredPassword] = useState(false);
+  useEffect(() => {
+    if (!isServerEngine(connection.engine)) {
+      setHasStoredPassword(false);
+      return;
+    }
+    let isCurrent = true;
+    invoke<boolean>("has_connection_password", { connectionId: connection.id })
+      .then((stored) => isCurrent && setHasStoredPassword(stored))
+      .catch((err) => console.error("has_connection_password:", err));
+    return () => {
+      isCurrent = false;
+    };
+  }, [connection.id, connection.engine]);
+  return hasStoredPassword;
+}
 
 type TestState =
   | { status: "idle" }
@@ -30,6 +50,11 @@ interface ConnectionFormProps {
   hasStoredPassword?: boolean;
   /** Placeholder of the SQLite file field when left empty. */
   sqlitePlaceholder?: string;
+  /** Named connections offered as starting points. */
+  savedConnections?: SavedConnection[];
+  /** Name to save this connection under in the library ("" = don't). */
+  saveName?: string;
+  onSaveNameChange?: (name: string) => void;
 }
 
 /**
@@ -44,6 +69,9 @@ export function ConnectionForm({
   onPasswordChange,
   hasStoredPassword = false,
   sqlitePlaceholder = "Path to a .db / .sqlite file",
+  savedConnections = [],
+  saveName,
+  onSaveNameChange,
 }: ConnectionFormProps) {
   const [test, setTest] = useState<TestState>({ status: "idle" });
 
@@ -76,8 +104,37 @@ export function ConnectionForm({
     if (file) update({ path: file });
   };
 
+  const pickSaved = (id: string) => {
+    const saved = savedConnections.find((s) => s.connection.id === id);
+    if (!saved) return;
+    setTest({ status: "idle" });
+    onPasswordChange("");
+    onSaveNameChange?.(saved.name);
+    // Same id → the password stored in the keychain for it is reused.
+    onChange(saved.connection);
+  };
+  const pickedName = savedConnections.find((s) => s.connection.id === value.id)?.name;
+
   return (
     <>
+      {savedConnections.length > 0 && (
+        <div className="field">
+          <label className="label">Saved connection</label>
+          <select
+            className="input"
+            value={pickedName ? value.id : ""}
+            onChange={(e) => pickSaved(e.currentTarget.value)}
+          >
+            <option value="">— New connection —</option>
+            {savedConnections.map((saved) => (
+              <option key={saved.connection.id} value={saved.connection.id}>
+                {saved.name} · {ENGINE_LABEL[saved.connection.engine]}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       <div className="field">
         <label className="label">Database engine</label>
         <div className="radio-group">
@@ -191,6 +248,21 @@ export function ConnectionForm({
             </div>
           </div>
         </>
+      )}
+
+      {onSaveNameChange && (
+        <div className="field">
+          <label className="label">Save as named connection (optional)</label>
+          <input
+            className="input"
+            value={saveName ?? ""}
+            placeholder="e.g. Production, Local dev"
+            onChange={(e) => onSaveNameChange(e.currentTarget.value)}
+          />
+          <div className="text-muted">
+            Reusable from other projects; projects sharing it share its stored password.
+          </div>
+        </div>
       )}
 
       <div className="connection-form__test">

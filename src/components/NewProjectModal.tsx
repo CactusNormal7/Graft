@@ -4,20 +4,26 @@ import { pickDirectory } from "../native";
 import { useGraftStore } from "../store/useGraftStore";
 import { showError } from "../dialogs/appDialogs";
 import { connectionProblem, newConnectionId } from "../connection";
-import { ConnectionForm } from "./ConnectionForm";
+import { ConnectionForm, useStoredPassword } from "./ConnectionForm";
 import type { ConnectionConfig } from "../types";
 
 /** Modal to create a new project: name + location (default) + connection. */
 export function NewProjectModal({ onClose }: { onClose: () => void }) {
   const createProject = useGraftStore((s) => s.createProject);
+  const preset = useGraftStore((s) => s.newProjectConnection);
+  const savedConnections = useGraftStore((s) => s.savedConnections);
+  const saveNamedConnection = useGraftStore((s) => s.saveNamedConnection);
 
   const [name, setName] = useState("untitled");
   const [location, setLocation] = useState("");
-  const [connection, setConnection] = useState<ConnectionConfig>(() => ({
-    id: newConnectionId(),
-    engine: "sqlite",
-  }));
+  const [connection, setConnection] = useState<ConnectionConfig>(
+    () => preset ?? { id: newConnectionId(), engine: "sqlite" },
+  );
   const [password, setPassword] = useState("");
+  const [saveName, setSaveName] = useState(
+    () => savedConnections.find((s) => s.connection.id === preset?.id)?.name ?? "",
+  );
+  const hasStoredPassword = useStoredPassword(connection);
   const [busy, setBusy] = useState(false);
 
   // Resolve the default location (~/Documents/Graft) on mount.
@@ -48,8 +54,19 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
         isServer && password ? password : undefined,
       );
       // Not created = the user kept their unsaved changes: stay on the modal.
-      if (created) onClose();
-      else setBusy(false);
+      if (!created) {
+        setBusy(false);
+        return;
+      }
+      onClose();
+      // The project's connection is final now (a default SQLite path is only
+      // chosen at creation).
+      const createdConnection = useGraftStore.getState().connection;
+      if (saveName.trim() && createdConnection) {
+        await saveNamedConnection(saveName, createdConnection).catch(
+          (e) => void showError("Could not save the named connection", String(e)),
+        );
+      }
     } catch (e) {
       void showError("Could not create the project", String(e));
       setBusy(false);
@@ -92,6 +109,10 @@ export function NewProjectModal({ onClose }: { onClose: () => void }) {
           onChange={setConnection}
           password={password}
           onPasswordChange={setPassword}
+          hasStoredPassword={hasStoredPassword}
+          savedConnections={savedConnections}
+          saveName={saveName}
+          onSaveNameChange={setSaveName}
           sqlitePlaceholder={
             safeName ? `Default: ${safeName}.db (created in location)` : "Default: <name>.db"
           }
