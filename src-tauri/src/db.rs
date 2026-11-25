@@ -39,10 +39,9 @@ pub struct QueryResult {
 pub struct SqlError {
     /// Human-readable message, as reported by the engine.
     pub message: String,
-    /// 0-based character offset of the error in the executed SQL, when the
-    /// engine reports one. SQLite does not (sqlx does not expose
-    /// `sqlite3_error_offset`), so the frontend falls back to locating the
-    /// token quoted in the message.
+    /// Offset of the error in the executed SQL, in UTF-16 code units (a
+    /// JavaScript string index), when the engine reports one. Otherwise the
+    /// frontend locates the token quoted in the message.
     pub position: Option<usize>,
 }
 
@@ -160,12 +159,89 @@ async fn fetch_rows(
     Ok((columns, rows, total_rows))
 }
 
-async fn run(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, sqlx::Error> {
-    let mut conn = connect(db_path).await?;
+/// `byte_offset` (into `sql`) as a JavaScript string index.
+fn utf16_offset(sql: &str, byte_offset: usize) -> usize {
+    sql[..byte_offset].encode_utf16().count()
+}
 
+/// Re-prepare the statements of `sql` one by one (preparing executes
+/// nothing) until one fails with `message`, and return the error's byte offset
+/// in `sql`. Needed because sqlx clears the error state (finalizing earlier
+/// statements) before `sqlite3_error_offset` can be read, and because that
+/// offset is relative to the failing statement, not to the whole script.
+///
+/// # Safety
+/// `db` must be a valid connection handle that no other thread is using.
+unsafe fn locate_by_preparing(
+    db: *mut libsqlite3_sys::sqlite3,
+    sql: &str,
+    message: &str,
+) -> Option<usize> {
+    use libsqlite3_sys as ffi;
+    use std::ffi::{CStr, CString};
+
+    let text = CString::new(sql).ok()?;
+    let base = text.as_ptr();
+    let mut tail = base;
+    loop {
+        let mut statement = std::ptr::null_mut();
+        let mut next = std::ptr::null();
+        let rc = ffi::sqlite3_prepare_v2(db, tail, -1, &mut statement, &mut next);
+        ffi::sqlite3_finalize(statement);
+        let statement_start = usize::try_from(tail.offset_from(base)).ok()?;
+        if rc != ffi::SQLITE_OK {
+            // A different error means this statement depends on an earlier one
+            // having run (e.g. a table it creates): the position is unknown.
+            let reason = CStr::from_ptr(ffi::sqlite3_errmsg(db)).to_string_lossy();
+            let offset = usize::try_from(ffi::sqlite3_error_offset(db)).ok()?;
+            return message.contains(reason.as_ref()).then_some(statement_start + offset);
+        }
+        if next.is_null() || *next == 0 || next == tail {
+            return None;
+        }
+        tail = next;
+    }
+}
+
+/// Where SQLite places the error `message` raised while running `sql`, as a
+/// byte offset.
+async fn sqlite_error_position(
+    conn: &mut SqliteConnection,
+    sql: &str,
+    message: &str,
+) -> Option<usize> {
+    let mut handle = conn.lock_handle().await.ok()?;
+    // SAFETY: the locked handle guarantees sqlx's worker thread is not using
+    // the connection while we prepare (and never execute) statements on it.
+    unsafe { locate_by_preparing(handle.as_raw_handle().as_ptr(), sql, message) }
+}
+
+async fn run(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, SqlError> {
+    let mut conn = connect(db_path).await?;
+    match execute(&mut conn, sql, max_rows).await {
+        Ok(result) => {
+            conn.close().await?;
+            Ok(result)
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let position = sqlite_error_position(&mut conn, sql, &message)
+                .await
+                .filter(|&byte| byte < sql.len() && sql.is_char_boundary(byte))
+                .map(|byte| utf16_offset(sql, byte));
+            Err(SqlError { message, position })
+        }
+    }
+}
+
+async fn execute(
+    conn: &mut SqliteConnection,
+    sql: &str,
+    max_rows: usize,
+) -> Result<QueryResult, sqlx::Error> {
     let started = Instant::now();
     let result = if returns_rows(sql) {
-        let (columns, rows, total_rows) = fetch_rows(&mut conn, sql, max_rows).await?;
+        let (columns, rows, total_rows) = fetch_rows(conn, sql, max_rows).await?;
         QueryResult {
             columns,
             truncated: total_rows > rows.len(),
@@ -175,7 +251,7 @@ async fn run(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, s
             total_rows,
         }
     } else {
-        let outcome = sqlx::query(sql).execute(&mut conn).await?;
+        let outcome = sqlx::query(sql).execute(&mut *conn).await?;
         QueryResult {
             columns: vec![],
             rows: vec![],
@@ -185,8 +261,6 @@ async fn run(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, s
             truncated: false,
         }
     };
-
-    conn.close().await?;
     Ok(result)
 }
 
@@ -204,7 +278,7 @@ pub async fn execute_sql(
     max_rows: Option<usize>,
 ) -> Result<QueryResult, SqlError> {
     let max = max_rows.unwrap_or(DEFAULT_MAX_ROWS).max(1);
-    run(&db_path, &sql, max).await.map_err(SqlError::from)
+    run(&db_path, &sql, max).await
 }
 
 /// One column of a table/view.
@@ -369,6 +443,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[test]
+    fn converts_byte_offsets_to_javascript_indices() {
+        assert_eq!(utf16_offset("é😀x", "é😀".len()), 3);
+    }
+
     #[tokio::test]
     async fn reports_syntax_errors_with_the_offending_token() {
         let dir = std::env::temp_dir().join(format!("graft-err-{}", std::process::id()));
@@ -379,6 +458,27 @@ mod tests {
             .err()
             .expect("syntax error");
         assert!(err.message.contains("near \"FORM\""), "{}", err.message);
+        assert_eq!(err.position, Some(9));
+
+        // Second statement, and the token also appears earlier: the engine's
+        // offset (relative to the statement) picks the right occurrence.
+        let script = "SELECT 'é' AS id;\nSELECT id, x FROM t wher id = 1";
+        let err = execute_sql(db.to_string_lossy().into_owned(), script.into(), None)
+            .await
+            .err()
+            .expect("syntax error");
+        let expected = script.rfind("id =").unwrap();
+        assert_eq!(err.position, Some(utf16_offset(script, expected)), "{}", err.message);
+
+        // An error that depends on an earlier statement having run: preparing
+        // alone fails differently, so no position is claimed.
+        let script = "CREATE TABLE fresh (a INT); SELECT b FROM fresh";
+        let err = execute_sql(db.to_string_lossy().into_owned(), script.into(), None)
+            .await
+            .err()
+            .expect("unknown column");
+        assert!(err.message.contains("no such column"), "{}", err.message);
+        assert_eq!(err.position, None);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

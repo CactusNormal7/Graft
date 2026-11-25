@@ -1257,6 +1257,7 @@ version = "0.1.0"
 dependencies = [
  "dirs 5.0.1",
  "futures-util",
+ "libsqlite3-sys",
  "serde",
  "serde_json",
  "sqlx",

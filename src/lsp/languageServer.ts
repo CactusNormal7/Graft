@@ -54,6 +54,11 @@ async function startLanguageServer(): Promise<LSPClient | null> {
     if (!isRunning) return null;
     const client = new LSPClient({
       rootUri: ROOT_URI,
+      // Without this capability the server silently ignores
+      // didChangeConfiguration, and with it our lint rules. (Its follow-up
+      // workspace/configuration request is answered "not implemented", which
+      // it tolerates.)
+      extensions: [{ clientCapabilities: { workspace: { configuration: true } } }],
       notificationHandlers: {
         "textDocument/publishDiagnostics": (_client, params) => {
           publishDiagnostics(params);

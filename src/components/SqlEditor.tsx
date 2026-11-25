@@ -19,12 +19,8 @@ import {
   indentOnInput,
   foldKeymap,
 } from "@codemirror/language";
-import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
-import {
-  LSPClient,
-  languageServerSupport,
-  serverCompletionSource,
-} from "@codemirror/lsp-client";
+import { linter, setDiagnostics, type Diagnostic } from "@codemirror/lint";
+import { LSPClient, LSPPlugin, serverCompletionSource } from "@codemirror/lsp-client";
 import { blockDocumentUri, getLanguageServer } from "../lsp/languageServer";
 import {
   subscribeDiagnostics,
@@ -165,7 +161,13 @@ export function SqlEditor({
           ...(languageServer ? [serverCompletionSource] : []),
         ],
       }),
-      ...(languageServer ? [languageServerSupport(languageServer, documentUri, "sql")] : []),
+      // Declared up front (no lint source): diagnostics are pushed with
+      // setDiagnostics, and the extension it would otherwise append on the fly
+      // is dropped — with the underline — whenever these extensions change.
+      linter(null),
+      // Document sync only: completions are merged into the sources above, and
+      // the package's bundled keymaps would steal Shift+Alt+F for LSP formatting.
+      ...(languageServer ? [LSPPlugin.create(languageServer, documentUri, "sql")] : []),
       closeBrackets(),
       bracketMatching(),
       indentOnInput(),

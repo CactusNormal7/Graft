@@ -289,8 +289,15 @@ clic, supprimable (✕).
   tables + colonnes), bouton **↻** de rafraîchissement manuel.
 - **Erreurs en ligne (diagnostics)** : `execute_sql` renvoie en cas d'échec
   une erreur structurée `SqlError { message, position }` (`position` = offset
-  0-based dans le SQL exécuté quand le moteur le fournit ; SQLite ne le
-  fournit pas via sqlx). `runBlock` appelle `locateError`
+  dans le SQL exécuté, en unités UTF-16 — un index de chaîne JavaScript).
+  **SQLite** : sqlx n'expose pas `sqlite3_error_offset` et efface l'état
+  d'erreur avant qu'on puisse le lire ; `db.rs` **re-prépare** donc (sans
+  rien exécuter) les instructions une à une via `libsqlite3-sys` (même version
+  que celle de sqlx) jusqu'à celle qui échoue avec le **même message**, et lit
+  l'offset à ce moment-là (relatif à l'instruction → rendu absolu). Si
+  l'erreur dépend d'une instruction précédente exécutée (table créée plus
+  haut), la re-préparation échoue autrement et aucune position n'est
+  annoncée. `runBlock` appelle ensuite `locateError`
   (`components/sqlDiagnostics.ts`, pur et testé) qui choisit la plage à
   souligner : la position moteur si le SQL a été exécuté tel quel (pas de
   `{{favori}}` expansé, sinon les offsets pointeraient dans l'expansion), sinon
@@ -299,7 +306,10 @@ clic, supprimable (✕).
   sinon la première ligne non vide. Le résultat est stocké sur le bloc source
   (`data.editorError = { from, to, message }`, transitoire : remis à zéro à la
   sauvegarde, au run suivant et à la première édition) et appliqué par
-  `SqlEditor` via `setDiagnostics` (`@codemirror/lint`) : soulignement ondulé
+  `SqlEditor` via `setDiagnostics` (`@codemirror/lint`, extension `linter(null)`
+  déclarée d'office : sinon celle que `setDiagnostics` ajoute à la volée
+  disparaît — avec le soulignement — à chaque reconfiguration de l'éditeur,
+  ex. rafraîchissement du schéma ou arrivée du LSP) : soulignement ondulé
   `--error` + infobulle au survol. Le message reste aussi affiché sous
   l'éditeur.
 - Le nœud (`SqlBlockNode`) expose aussi **titre éditable** (double-clic),
@@ -376,7 +386,11 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
   `read_message`) et les émet en événements Tauri `lsp-message` ; `lsp_send`
   encadre (`encode_message`) et écrit sur stdin. Le protocole lui-même est géré
   côté front par **`@codemirror/lsp-client`** (`src/lsp/languageServer.ts`,
-  transport sur l'IPC Tauri). Un seul client pour tous les blocs ; chaque bloc
+  transport sur l'IPC Tauri). Seul `LSPPlugin.create` (synchro du document)
+  est branché dans l'éditeur, pas `languageServerSupport` : ses keymaps
+  détourneraient Shift+Alt+F vers un formatage LSP que ce serveur n'offre pas.
+  Le client déclare la capacité `workspace.configuration`, sans laquelle le
+  serveur **ignore** `didChangeConfiguration` (donc la config lint). Un seul client pour tous les blocs ; chaque bloc
   est un document `file:///graft/<id>.sql`.
 - **Apport** : complétions du serveur (`serverCompletionSource`) ajoutées aux
   sources existantes (schéma + mots-clés), et diagnostics `sqlint`. Les règles

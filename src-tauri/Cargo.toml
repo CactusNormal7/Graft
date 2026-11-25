@@ -29,3 +29,6 @@ sqlx = { version = "0.8", default-features = false, features = [
   "sqlite",
 ] }
 tokio = { version = "1", features = ["full"] }
+# Same version as sqlx-sqlite's (Cargo unifies them): only used to read
+# `sqlite3_error_offset`, which sqlx does not expose, to underline errors.
+libsqlite3-sys = "0.30"
