@@ -98,3 +98,27 @@ describe("unsaved changes", () => {
     }
   });
 });
+
+describe("execution errors", () => {
+  beforeEach(async () => {
+    files.clear();
+    writeProject("/p/e.graft", "e");
+    await store.getState().openProjectByPath("/p/e.graft");
+  });
+
+  it("locates the error for the editor and clears it on edit", async () => {
+    store.getState().addBlock("query");
+    const id = store.getState().nodes[0].id;
+    store.getState().updateSql(id, "SELECT * FORM t");
+    invoke.mockRejectedValueOnce({ message: 'near "FORM": syntax error', position: null });
+
+    await store.getState().runBlock(id);
+    const failed = store.getState().nodes[0].data;
+    expect(failed.status).toBe("error");
+    expect(failed.error).toBe('near "FORM": syntax error');
+    expect(failed.editorError).toMatchObject({ from: 9, to: 13 });
+
+    store.getState().updateSql(id, "SELECT * FROM t");
+    expect(store.getState().nodes[0].data.editorError).toBeNull();
+  });
+});

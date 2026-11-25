@@ -19,6 +19,7 @@ import {
 } from "../native";
 import { insertIntoEditor } from "../canvas/editorRegistry";
 import { expandSnippets, toSnippetName } from "./snippets";
+import { errorMessage, errorPosition, locateError } from "../components/sqlDiagnostics";
 import { generateInserts, jsonToInserts, warningsHeader } from "../canvas/orm";
 import { quoteIdent } from "../sqlFormat";
 import type {
@@ -400,7 +401,7 @@ function serializeNodes(nodes: AnyNode[]): NotebookNode[] {
     data:
       n.type === "group"
         ? n.data
-        : { ...n.data, status: "idle", result: null, error: null },
+        : { ...n.data, status: "idle", result: null, error: null, editorError: undefined },
   })) as NotebookNode[];
 }
 
@@ -939,8 +940,9 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     });
   },
 
+  // Editing invalidates the underlined error range: it pointed into the old text.
   updateSql: (id, sql) =>
-    set({ nodes: patchNode(get().nodes, id, { sql }) }),
+    set({ nodes: patchNode(get().nodes, id, { sql, editorError: null }) }),
 
   updateTitle: (id, title) =>
     set({ nodes: patchNode(get().nodes, id, { title }) }),
@@ -1046,14 +1048,16 @@ export const useGraftStore = create<GraftState>((set, get) => ({
     // embedded in the source block's footer.
     const routed = node.data.emitToBlock === true;
 
-    set({ nodes: patchNode(get().nodes, id, { status: "running", error: null }) });
+    set({
+      nodes: patchNode(get().nodes, id, { status: "running", error: null, editorError: null }),
+    });
     // Ensure the linked block exists (spawn it before execution so its
     // "running" state is visible immediately).
     if (routed) ensureLinkedResult(get, set, node);
 
+    // Expand `{{favorite}}` references into inline subqueries before running.
+    const sql = expandSnippets(node.data.sql, get().snippets);
     try {
-      // Expand `{{favorite}}` references into inline subqueries before running.
-      const sql = expandSnippets(node.data.sql, get().snippets);
       const result = await invoke<QueryResult>("execute_sql", {
         dbPath,
         sql,
@@ -1063,11 +1067,11 @@ export const useGraftStore = create<GraftState>((set, get) => ({
       // DDL may have changed the schema — refresh autocompletion data.
       if (/\b(create|alter|drop)\b/i.test(node.data.sql)) void get().refreshSchema();
     } catch (err) {
-      writeRunResult(get, set, id, {
-        status: "error",
-        result: null,
-        error: String(err),
-      });
+      const message = errorMessage(err);
+      writeRunResult(get, set, id, { status: "error", result: null, error: message });
+      const range = locateError(node.data.sql, { message, position: errorPosition(err) }, sql);
+      const editorError = range ? { ...range, message } : null;
+      set({ nodes: patchNode(get().nodes, id, { editorError }) });
     }
   },
 

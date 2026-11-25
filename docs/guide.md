@@ -76,7 +76,11 @@ Au lancement, Graft affiche l'**accueil** : créer un projet ou rouvrir un réce
      et temps en ms), avec **numéros de ligne** et **double-clic sur une
      cellule pour la copier**.
    - Une écriture/DDL affiche le **nombre de lignes affectées**.
-   - Une erreur s'affiche en rouge dans le bloc.
+   - Une erreur s'affiche en rouge dans le bloc, et l'endroit fautif est
+     **souligné dans l'éditeur** (survole-le pour relire le message). La
+     position vient du moteur quand il la donne, sinon du mot cité dans le
+     message ; à défaut, la première ligne est soulignée. Le soulignement
+     disparaît dès que tu modifies le SQL.
 3. **Actions par bloc** dans le header :
    - **Double-clic sur le titre** → renommer (Entrée pour valider, Échap pour
      annuler).
@@ -227,8 +231,8 @@ Génère l'exécutable/installeur dans `src-tauri/target/release/` (et le bundle
 ## 6. Limites actuelles (v0.1)
 
 - Éditeur SQL déjà bien avancé (CodeMirror 6 : coloration + autocomplétion
-  schéma + gutter + brackets + `Mod-Enter`) — reste à faire côté v0.2 : LSP
-  (`sql-language-server`), diagnostics en ligne, formatage SQL.
+  schéma + gutter + brackets + `Mod-Enter` + erreurs soulignées) — reste à
+  faire côté v0.2 : LSP (`sql-language-server`), formatage SQL.
 - La **palette ⌘K** ne cherche encore que parmi les **favoris** (pas de
   commandes).
 - Seul **SQLite** est supporté (Postgres/MySQL en v0.3).

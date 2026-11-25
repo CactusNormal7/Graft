@@ -133,7 +133,8 @@ Graft/
 │   │   ├── CommandPalette.tsx  # barre d'actions ⌘K / Ctrl+K (favoris) — état `paletteOpen` dans le store
 │   │   ├── Toolbar.tsx       # barre du haut : connexion, +Block, Run all, zoom
 │   │   ├── Sidebar.tsx       # explorateur de schéma live (tables/colonnes, recherche, insertion) + liste des blocs
-│   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter
+│   │   ├── SqlEditor.tsx     # CodeMirror 6 SQLite : coloration, autocomplete schéma, gutter, brackets, Mod-Enter, diagnostics
+│   │   ├── sqlDiagnostics.ts # localisation d'une erreur d'exécution dans le SQL (position moteur ou jeton cité)
 │   │   ├── PageTabs.tsx      # barre d'onglets de pages (Excel-like) en bas du canvas
 │   │   └── StatusBar.tsx     # barre de statut bas
 │   └── canvas/
@@ -274,6 +275,21 @@ clic, supprimable (✕).
   `@codemirror/lang-sql` comme `schema` **et** rendu dans la sidebar
   (`Sidebar.tsx`) : arbre tables → colonnes, recherche (filtre sur noms de
   tables + colonnes), bouton **↻** de rafraîchissement manuel.
+- **Erreurs en ligne (diagnostics)** : `execute_sql` renvoie en cas d'échec
+  une erreur structurée `SqlError { message, position }` (`position` = offset
+  0-based dans le SQL exécuté quand le moteur le fournit ; SQLite ne le
+  fournit pas via sqlx). `runBlock` appelle `locateError`
+  (`components/sqlDiagnostics.ts`, pur et testé) qui choisit la plage à
+  souligner : la position moteur si le SQL a été exécuté tel quel (pas de
+  `{{favori}}` expansé, sinon les offsets pointeraient dans l'expansion), sinon
+  le jeton cité par le message (`near "FORM"` pour SQLite/Postgres,
+  `near '…' at line N` pour MySQL, recherché à partir de la ligne indiquée),
+  sinon la première ligne non vide. Le résultat est stocké sur le bloc source
+  (`data.editorError = { from, to, message }`, transitoire : remis à zéro à la
+  sauvegarde, au run suivant et à la première édition) et appliqué par
+  `SqlEditor` via `setDiagnostics` (`@codemirror/lint`) : soulignement ondulé
+  `--error` + infobulle au survol. Le message reste aussi affiché sous
+  l'éditeur.
 - Le nœud (`SqlBlockNode`) expose aussi **titre éditable** (double-clic),
   **dupliquer** (⧉), **supprimer** (✕) et **▶ Run** — le run est aussi
   déclenché par `Mod-Enter`.
@@ -282,7 +298,7 @@ clic, supprimable (✕).
 
 | Commande | Signature | Rôle |
 |----------|-----------|------|
-| `execute_sql` | `(db_path: String, sql: String, max_rows: Option<usize>) -> Result<QueryResult, String>` | exécute un statement SQLite ; **plafonne** les lignes renvoyées (défaut 5000) |
+| `execute_sql` | `(db_path: String, sql: String, max_rows: Option<usize>) -> Result<QueryResult, SqlError>` | exécute un statement SQLite ; **plafonne** les lignes renvoyées (défaut 5000) ; erreur = `{ message, position }` |
 | `introspect_schema` | `(db_path: String) -> Result<Vec<TableInfo>, String>` | structure SQLite : tables/vues, colonnes (type, notnull, pk) et **clés étrangères** |
 | `save_notebook` | `(path: String, contents: String) -> Result<(), String>` | écrit un `.graft` (atomique) |
 | `load_notebook` | `(path: String) -> Result<String, String>` | lit un `.graft` |
@@ -716,6 +732,5 @@ Clarifier l'intention exacte avant de planifier quoi que ce soit.
 - Les `alert`/`prompt`/`confirm` du webview (messages d'erreur, nom d'un
   favori, suppression d'un favori) ne sont pas encore remplacés par des
   fenêtres de l'app.
-- Pas encore de **barre de menus native**, ni de LSP, ni de diagnostics en
-  ligne, ni de formatage SQL (`src/sqlFormat.ts` ne fait que l'échappement des
+- Pas encore de **barre de menus native**, ni de LSP, ni de formatage SQL (`src/sqlFormat.ts` ne fait que l'échappement des
   littéraux/identifiants, ce n'est pas un formateur).

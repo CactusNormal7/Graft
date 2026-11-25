@@ -1,5 +1,7 @@
 // Core domain types for Graft.
 
+import type { ErrorRange } from "./components/sqlDiagnostics";
+
 /** The differentiated SQL block kinds Graft targets (see roadmap v1.0). */
 export type BlockType =
   | "query"
@@ -68,6 +70,10 @@ export interface SqlBlockData {
   status: ExecStatus;
   result: QueryResult | null;
   error: string | null;
+  /** Last execution error and where it sits in `sql`, underlined in the
+   *  editor (kept on the source block even when the result is routed to a
+   *  linked block). Transient: reset on save and on the next edit. */
+  editorError?: (ErrorRange & { message: string }) | null;
   resultView?: ResultView;
   /** Plot configuration for the "chart" result view. */
   chartConfig?: ChartConfig;

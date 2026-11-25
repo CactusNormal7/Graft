@@ -34,6 +34,27 @@ pub struct QueryResult {
     pub truncated: bool,
 }
 
+/// An execution error, structured so the editor can underline it.
+#[derive(Serialize, Debug)]
+pub struct SqlError {
+    /// Human-readable message, as reported by the engine.
+    pub message: String,
+    /// 0-based character offset of the error in the executed SQL, when the
+    /// engine reports one. SQLite does not (sqlx does not expose
+    /// `sqlite3_error_offset`), so the frontend falls back to locating the
+    /// token quoted in the message.
+    pub position: Option<usize>,
+}
+
+impl From<sqlx::Error> for SqlError {
+    fn from(err: sqlx::Error) -> Self {
+        SqlError {
+            message: err.to_string(),
+            position: None,
+        }
+    }
+}
+
 /// Open a single connection to the database file. A pool would be overkill:
 /// each command runs one unit of work and closes the connection afterwards.
 /// `filename()` (rather than URL parsing) keeps Windows paths and paths
@@ -175,15 +196,15 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 /// Execute SQL against the SQLite database at `db_path`.
 /// `max_rows` caps how many rows are returned (defaults to `DEFAULT_MAX_ROWS`).
-/// Errors are returned as their string representation for display in the block.
+/// Errors are returned as a `SqlError` (message + optional position).
 #[tauri::command]
 pub async fn execute_sql(
     db_path: String,
     sql: String,
     max_rows: Option<usize>,
-) -> Result<QueryResult, String> {
+) -> Result<QueryResult, SqlError> {
     let max = max_rows.unwrap_or(DEFAULT_MAX_ROWS).max(1);
-    run(&db_path, &sql, max).await.map_err(|e| e.to_string())
+    run(&db_path, &sql, max).await.map_err(SqlError::from)
 }
 
 /// One column of a table/view.
@@ -345,6 +366,19 @@ mod tests {
         assert_eq!(schema[0].columns.len(), 2);
         assert!(schema[0].columns[0].pk);
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn reports_syntax_errors_with_the_offending_token() {
+        let dir = std::env::temp_dir().join(format!("graft-err-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("e.db");
+        let err = execute_sql(db.to_string_lossy().into_owned(), "SELECT * FORM t".into(), None)
+            .await
+            .err()
+            .expect("syntax error");
+        assert!(err.message.contains("near \"FORM\""), "{}", err.message);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -19,7 +19,9 @@ import {
   indentOnInput,
   foldKeymap,
 } from "@codemirror/language";
+import { setDiagnostics, type Diagnostic } from "@codemirror/lint";
 import { registerEditor, unregisterEditor } from "../canvas/editorRegistry";
+import type { ErrorRange } from "./sqlDiagnostics";
 
 interface SqlEditorProps {
   blockId: string;
@@ -29,6 +31,20 @@ interface SqlEditorProps {
   onChange: (value: string) => void;
   onRun: () => void;
   onFocus?: () => void;
+  /** Last execution error, underlined in the editor when set. */
+  error?: (ErrorRange & { message: string }) | null;
+}
+
+/** Diagnostics for the editor: none, or the execution error clamped to the
+ *  document (the store clears the range on edit, but stay defensive). */
+function toDiagnostics(
+  error: SqlEditorProps["error"],
+  docLength: number,
+): Diagnostic[] {
+  if (!error) return [];
+  const from = Math.min(error.from, docLength);
+  const to = Math.min(Math.max(error.to, from), docLength);
+  return [{ from, to, severity: "error", message: error.message, source: "database" }];
 }
 
 /**
@@ -43,6 +59,7 @@ export function SqlEditor({
   onChange,
   onRun,
   onFocus,
+  error,
 }: SqlEditorProps) {
   // Keep callbacks current without rebuilding the editor extensions.
   const runRef = useRef(onRun);
@@ -54,13 +71,26 @@ export function SqlEditor({
   // re-render), so it can't be read from a ref in a mount effect — register it
   // from `onCreateEditor` instead.
   const viewRef = useRef<EditorView | null>(null);
+  const errorRef = useRef(error);
+  errorRef.current = error;
+
+  const applyDiagnostics = useCallback((view: EditorView) => {
+    const diagnostics = toDiagnostics(errorRef.current, view.state.doc.length);
+    view.dispatch(setDiagnostics(view.state, diagnostics));
+  }, []);
+
   const handleCreateEditor = useCallback(
     (view: EditorView) => {
       viewRef.current = view;
       registerEditor(blockId, view);
+      applyDiagnostics(view);
     },
-    [blockId],
+    [blockId, applyDiagnostics],
   );
+
+  useEffect(() => {
+    if (viewRef.current) applyDiagnostics(viewRef.current);
+  }, [error, applyDiagnostics]);
 
   const extensions = useMemo(() => {
     const dialect = SQLite;
@@ -150,6 +180,18 @@ export function SqlEditor({
             borderRadius: "6px",
             boxShadow: "var(--shadow-float)",
             fontFamily: "var(--font-mono)",
+          },
+          ".cm-lintRange-error": {
+            backgroundImage: "none",
+            textDecoration: "underline wavy var(--error)",
+            textDecorationSkipInk: "none",
+            textUnderlineOffset: "3px",
+          },
+          ".cm-diagnostic-error": {
+            borderLeft: "3px solid var(--error)",
+            color: "var(--error-text)",
+            fontFamily: "var(--font-mono)",
+            whiteSpace: "pre-wrap",
           },
           ".cm-tooltip-autocomplete ul li[aria-selected]": {
             backgroundColor: "var(--accent-dim)",

@@ -259,6 +259,7 @@ export function SqlBlockNode({ id, data, selected }: NodeProps<SqlNode>) {
             onChange={(v) => updateSql(id, v)}
             onRun={() => runBlock(id)}
             onFocus={() => setFocusedBlock(id)}
+            error={data.editorError ?? null}
           />
         </div>
       )}
