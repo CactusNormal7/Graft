@@ -13,6 +13,8 @@ const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
       return null;
     case "introspect_schema":
       return { tables: [], triggers: [], routines: [] };
+    case "register_project":
+      return null;
     case "set_connection_password":
       passwords.set(args!.connectionId as string, args!.password as string);
       return null;

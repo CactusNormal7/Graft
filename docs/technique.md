@@ -171,9 +171,11 @@ Graft/
 └── src-tauri/                # backend Rust (Tauri)
     ├── Cargo.toml            # app Tauri + racine du workspace Cargo (membres : crates/*)
     ├── crates/
+    │   ├── graft-mcp/        # serveur MCP stdio (rmcp) : service.rs (logique testée) + server.rs (tools/resources/prompts)
     │   └── graft-core/       # moteur partagé app / serveur MCP, sans dépendance Tauri
     │       └── src/
     │           ├── db/       # moteurs SQLite / Postgres / MySQL — cf. § Connexions et moteurs
+    │           ├── inserts.rs # INSERT depuis un résultat (portage du chemin « plat » de orm.ts)
     │           ├── files.rs  # E/S .graft : écriture atomique, règle « .graft uniquement », noms et chemins de projet
     │           ├── notebook.rs # lecture/édition des blocs d'un .graft en Rust (champs inconnus préservés) + expansion {{favoris}}
     │           ├── registry.rs # projets connus + autorisation d'écriture MCP par projet (hors du .graft)
@@ -183,6 +185,7 @@ Graft/
     └── src/
         ├── main.rs           # appelle graft_lib::run()
         ├── lib.rs            # Builder Tauri, commandes, garde fermeture/quit si non sauvegardé
+        ├── registry_commands.rs # register_project / get_mcp_writes / set_mcp_writes (registre des projets connus)
         ├── db_commands.rs    # commandes Tauri sur graft_core::db (execute_sql / introspect_schema / test_connection / mots de passe)
         ├── notebook.rs       # commandes fichiers (s'appuient sur graft_core::files ; chemins accordés), projets + tests
         ├── scope.rs          # FileScope : chemins accordés par dialogue pour la session + tests
@@ -581,6 +584,8 @@ menus native. Les raccourcis sont écrits une fois (`SHORTCUTS`, forme
 | `set_unsaved_changes` | `(dirty: bool)` | reflète l'état « non sauvegardé » pour la garde fermeture/quit |
 | `lsp_start` | `() -> Result<bool, String>` | lance `sql-language-server` s'il est installé (idempotent) ; `false` sinon |
 | `lsp_send` | `(message: String) -> Result<(), String>` | envoie un message JSON-RPC au serveur (réponses : événement `lsp-message`) |
+| `register_project` | `(path, name) -> Result<(), String>` | inscrit le projet dans le registre local (seuls ces projets sont accessibles au MCP) |
+| `get_mcp_writes` / `set_mcp_writes` | `(path[, allow])` | lit / règle l'autorisation d'écriture de Claude (MCP) pour le projet |
 | `default_project_dir` | `() -> Result<String, String>` | dossier projet par défaut `<Documents\|Home>/Graft` (créé) |
 | `create_project_paths` | `(dir, name) -> Result<{projectPath, dbPath}, String>` | valide le nom, refuse un projet existant, dérive `.graft`/`.db` (join cross-platform) |
 
@@ -943,13 +948,14 @@ docker run --rm -d -p 3306:3306 -e MYSQL_ROOT_PASSWORD=graftpw -e MYSQL_DATABASE
 
 > Si `cargo` est introuvable dans une nouvelle session : `source "$HOME/.cargo/env"`.
 
-## Intégration Claude — MCP / connecteur personnalisé (à faire)
+## Intégration Claude — MCP / connecteur personnalisé
 
 **Besoin acté :** Graft devra s'intégrer à **Claude** pour que l'assistant puisse
 travailler *dans* un projet Graft — lire le schéma, lire/écrire des blocs,
 exécuter des requêtes, proposer des migrations — depuis Claude Desktop, Claude
 Code ou claude.ai. Le véhicule standard est le **Model Context Protocol (MCP)**.
-Rien n'est implémenté à ce stade ; cette section fixe la direction.
+Le **serveur MCP local** (`graft-mcp`) est implémenté (cf. § Serveur MCP
+`graft-mcp` ci-dessous) ; le reste de cette section fixe la direction.
 
 **Deux formes, à phaser :**
 
@@ -1000,12 +1006,76 @@ les blocs créés par Claude apparaissent **en direct** sur le canvas.
 - Jamais d'identifiants (mots de passe Postgres/MySQL) dans les réponses ; les
   secrets vivent dans le trousseau de l'OS.
 
+### Serveur MCP `graft-mcp` (implémenté)
+Binaire Rust `src-tauri/crates/graft-mcp` (SDK officiel **`rmcp`**, transport
+**stdio**), lancé par le client Claude ; **l'app n'a pas besoin d'être
+ouverte**. `service.rs` porte la logique (testée sans le protocole),
+`server.rs` la couche MCP. stdout = protocole, diagnostics sur stderr.
+
+| Tool | Rôle |
+|------|------|
+| `list_projects` | projets connus : nom, chemin, moteur, nom de base, écritures autorisées |
+| `get_schema` | introspection live (tables/vues, colonnes, clés, index, triggers, routines) ; repli sur le schéma en cache du `.graft` si la base est injoignable (`live: false`) |
+| `list_blocks` / `read_block` | blocs SQL (id, page, titre, type, SQL) |
+| `create_block` / `update_block` | écrit le `.graft` (format de l'app, champs inconnus préservés) ; **n'exécute rien** |
+| `run_query` | **une** instruction, **lecture seule** |
+| `run_block` | SQL du bloc, `{{favoris}}` **expansés comme `runBlock`**, lecture seule |
+| `execute_write` | DML/DDL — **refusé** sauf si le projet l'autorise |
+| `generate_inserts` | INSERT reproduisant les lignes d'une requête/d'un bloc, table devinée comme `orm.ts` (portage du chemin « plat » uniquement, pas du parent → enfants) |
+| `explain_query` | `EXPLAIN QUERY PLAN` (SQLite) / `EXPLAIN` (Postgres, MySQL) — **jamais `ANALYZE`**, qui exécuterait la requête |
+
+- **Resources** : `graft://projects/<projet>/schema` (JSON) et
+  `graft://projects/<projet>/blocks/<id>` (SQL du bloc), noms encodés en
+  pourcentage.
+- **Prompts** : `write_migration` (projet, objectif → schéma résumé, consigne
+  d'enregistrer la migration comme bloc plutôt que l'exécuter),
+  `explain_plan` (projet, SQL → plan joint), `document_schema`.
+
+**Garde-fous :**
+- **Projets connus seulement** : `graft_core::registry`
+  (`<données utilisateur>/Graft/projects.json`), alimenté par l'app à chaque
+  création / ouverture / sauvegarde (`register_project`, appelé par
+  `touchRecent`). Un projet se désigne par son nom (s'il est unique) ou son
+  chemin exact ; tout autre chemin est refusé, et seuls des `.graft` sont lus
+  ou écrits.
+- **Lecture seule par défaut** (`graft_core::db::execute_read_only`, sur une
+  connexion **jetable**, jamais la session de l'app) : SQLite ouvert en
+  `SQLITE_OPEN_READONLY` ; Postgres : l'instruction doit se **préparer** comme
+  une **seule** instruction (donc pas de `COMMIT; DELETE …`), session avec
+  `default_transaction_read_only=on`, exécution dans `BEGIN READ ONLY` puis
+  `ROLLBACK` ; MySQL : idem + **liste blanche** du premier mot-clé (`SELECT`,
+  `WITH`, `SHOW`, `EXPLAIN`, `DESCRIBE`, `VALUES`, `TABLE`), car MySQL valide
+  implicitement la transaction avant un DDL. Testé contre Postgres 16 et
+  MariaDB 10.11 (DELETE, `SELECT 1; DELETE`, `COMMIT; DELETE`, CREATE, DROP
+  refusés ; rien n'est modifié).
+- **Écritures opt-in par projet** : `execute_write` n'agit que si
+  « Allow Claude (MCP) to modify this database » est coché dans la fenêtre
+  Connection de l'app (`set_mcp_writes`). Le réglage est stocké dans le
+  registre **local**, pas dans le `.graft` : un projet partagé via Git ne peut
+  pas s'auto-autoriser. Côté client, Claude Desktop demande en plus
+  confirmation à chaque appel d'outil.
+- **Plafond** : 100 lignes par défaut, 1000 au maximum (`max_rows`).
+- **Pas d'identifiants** : mots de passe lus dans le trousseau, jamais
+  renvoyés ; `list_projects` ne donne que moteur + nom de base. Sur macOS, le
+  Trousseau demandera une fois d'autoriser `graft-mcp` à lire le mot de passe
+  (exécutable distinct de l'app).
+
+**Configuration manuelle** (Claude Desktop, `claude_desktop_config.json`) :
+
+```json
+{ "mcpServers": { "graft": { "command": "/chemin/vers/graft-mcp" } } }
+```
+
+Construire le binaire : `cargo build --release -p graft-mcp` (dans
+`src-tauri/`). Tests : `cargo test -p graft-mcp` (outils sur un projet SQLite
+temporaire + URI des ressources).
+
 **Avancement :** `graft-core` est extrait (workspace Cargo `src-tauri/`) avec
 le moteur multi-base, les E/S `.graft`, un modèle Rust du `.graft`
 (`notebook.rs` : lister/lire/créer/modifier des blocs en préservant tous les
-champs inconnus, expansion `{{favoris}}` identique à `runBlock`) et le registre
-des projets connus (`registry.rs`, `<données utilisateur>/Graft/projects.json`,
-autorisation d'écriture MCP par projet). Le binaire `graft-mcp` reste à faire.
+champs inconnus, expansion `{{favoris}}` identique à `runBlock`), le registre
+des projets connus, l'exécution en lecture seule et la génération d'INSERT
+(`inserts.rs`). Le serveur `graft-mcp` est en place.
 
 **Phasage proposé :** extraction de `graft-core` → serveur MCP stdio
 (SQLite, lecture seule + édition de blocs) → surveillance de fichier dans l'app

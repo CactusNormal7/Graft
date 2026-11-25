@@ -225,6 +225,96 @@ impl Databases {
     }
 }
 
+/// First keywords MySQL may run in read-only mode. MySQL ends a transaction
+/// implicitly before any DDL, so a READ ONLY transaction alone would not stop
+/// a `DROP TABLE`: only statements that cannot write are let through.
+const MYSQL_READ_ONLY_KEYWORDS: [&str; 8] =
+    ["select", "with", "show", "explain", "describe", "desc", "values", "table"];
+
+fn first_keyword(sql: &str) -> String {
+    strip_leading_comments(sql)
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn read_only_refusal() -> SqlError {
+    SqlError::new("read-only mode: only queries that cannot modify the database are allowed")
+}
+
+/// Run a single statement that cannot modify the database, on a fresh
+/// connection that is closed afterwards (never the app's session).
+///
+/// Layers, per engine:
+/// - SQLite: the file is opened read-only (SQLITE_OPEN_READONLY).
+/// - Postgres: the statement must prepare as **one** statement (so no
+///   `COMMIT; …` escape), runs inside `BEGIN READ ONLY` on a session whose
+///   default is read-only, then everything is rolled back.
+/// - MySQL: same, plus an allow-list of non-writing first keywords.
+pub async fn execute_read_only(
+    config: &ConnectionConfig,
+    password: Option<&str>,
+    sql: &str,
+    max_rows: usize,
+) -> Result<QueryResult, SqlError> {
+    config.validate()?;
+    let max_rows = max_rows.max(1);
+    match config.engine {
+        Engine::Sqlite => sqlite::run_read_only(config.sqlite_path()?, sql, max_rows).await,
+        Engine::Postgres => {
+            let options = postgres::connect_options(config, password)?
+                .options([("default_transaction_read_only", "on")]);
+            let mut conn = sqlx::PgConnection::connect_with(&options).await?;
+            let result = read_only_postgres(&mut conn, sql, max_rows).await;
+            conn.close().await.ok();
+            result.map_err(|err| SqlError {
+                position: postgres::error_position(&err, sql),
+                message: err.to_string(),
+            })
+        }
+        Engine::Mysql => {
+            if !MYSQL_READ_ONLY_KEYWORDS.contains(&first_keyword(sql).as_str()) {
+                return Err(read_only_refusal());
+            }
+            let mut conn = sqlx::MySqlConnection::connect_with(&mysql::connect_options(config, password)?).await?;
+            let result = read_only_mysql(&mut conn, sql, max_rows).await;
+            conn.close().await.ok();
+            Ok(result?)
+        }
+    }
+}
+
+// One function per engine rather than a generic one: a generic executor
+// bound makes the future impossible to prove `Send` for async callers.
+// Preparing first executes nothing and fails on several statements.
+
+async fn read_only_postgres(
+    conn: &mut sqlx::PgConnection,
+    sql: &str,
+    max_rows: usize,
+) -> Result<QueryResult, sqlx::Error> {
+    use sqlx::Executor;
+    conn.prepare(sql).await?;
+    conn.execute("BEGIN READ ONLY").await?;
+    let result = server::run_script(&mut *conn, sql, max_rows).await;
+    conn.execute("ROLLBACK").await?;
+    result
+}
+
+async fn read_only_mysql(
+    conn: &mut sqlx::MySqlConnection,
+    sql: &str,
+    max_rows: usize,
+) -> Result<QueryResult, sqlx::Error> {
+    use sqlx::Executor;
+    conn.prepare(sql).await?;
+    conn.execute("START TRANSACTION READ ONLY").await?;
+    let result = server::run_script(&mut *conn, sql, max_rows).await;
+    conn.execute("ROLLBACK").await?;
+    result
+}
+
 /// Connect once with a fresh connection (nothing cached) and report the
 /// server version — the "Test connection" button.
 pub async fn test_connection(
@@ -269,6 +359,13 @@ mod tests {
         assert!(!returns_rows("INSERT INTO returning_log (a) VALUES (1)"));
         assert!(!returns_rows("-- migration\nCREATE TABLE t (id INTEGER)"));
         assert!(!returns_rows("UPDATE t SET a = 1"));
+    }
+
+    #[test]
+    fn reads_the_first_keyword_past_comments() {
+        assert_eq!(first_keyword("-- note\n  SELECT 1"), "select");
+        assert_eq!(first_keyword("/* x */drop table t"), "drop");
+        assert_eq!(first_keyword("WITH(x) AS (SELECT 1) SELECT 2"), "with");
     }
 
     #[test]

@@ -137,7 +137,23 @@ async fn sqlite_error_position(
 
 /// Run `sql` against the SQLite file at `db_path` (created if missing).
 pub async fn run(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, SqlError> {
-    let mut conn = connect(db_path).await?;
+    let conn = connect(db_path).await?;
+    run_on(conn, sql, max_rows).await
+}
+
+/// Run `sql` on a connection opened read-only (SQLITE_OPEN_READONLY): the
+/// engine itself refuses any write, including through ATTACH or PRAGMA. A
+/// missing file is an error rather than created.
+pub async fn run_read_only(db_path: &str, sql: &str, max_rows: usize) -> Result<QueryResult, SqlError> {
+    let conn = SqliteConnectOptions::new()
+        .filename(db_path)
+        .read_only(true)
+        .connect()
+        .await?;
+    run_on(conn, sql, max_rows).await
+}
+
+async fn run_on(mut conn: SqliteConnection, sql: &str, max_rows: usize) -> Result<QueryResult, SqlError> {
     match execute(&mut conn, sql, max_rows).await {
         Ok(result) => {
             conn.close().await?;
@@ -380,6 +396,25 @@ mod tests {
         assert_eq!(snapshot.triggers[0].timing, "AFTER");
         assert_eq!(snapshot.triggers[0].events, "UPDATE");
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn read_only_runs_refuse_writes() {
+        let dir = std::env::temp_dir().join(format!("graft-ro-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("ro.db");
+        let db = db.to_string_lossy();
+        run(&db, "CREATE TABLE t (a INT); INSERT INTO t VALUES (1)", 10).await.unwrap();
+
+        let read = run_read_only(&db, "SELECT a FROM t", 10).await.unwrap();
+        assert_eq!(read.rows.len(), 1);
+        for write in ["INSERT INTO t VALUES (2)", "DROP TABLE t", "SELECT 1; DELETE FROM t"] {
+            let err = run_read_only(&db, write, 10).await.err().expect(write);
+            assert!(err.message.contains("readonly"), "{write}: {}", err.message);
+        }
+        assert!(run_read_only(&dir.join("missing.db").to_string_lossy(), "SELECT 1", 10).await.is_err());
+        assert_eq!(run(&db, "SELECT count(*) FROM t", 10).await.unwrap().rows[0][0], serde_json::json!(1));
         std::fs::remove_dir_all(&dir).ok();
     }
 

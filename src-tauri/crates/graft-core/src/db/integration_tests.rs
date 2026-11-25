@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use super::config::{ConnectionConfig, Engine, SslMode};
-use super::{test_connection, Databases};
+use super::{execute_read_only, test_connection, Databases};
 
 const POSTGRES_ENV: &str = "GRAFT_TEST_POSTGRES";
 const MYSQL_ENV: &str = "GRAFT_TEST_MYSQL";
@@ -171,6 +171,23 @@ async fn exercise(config: ConnectionConfig, password: Option<String>) {
     } else {
         assert!(error.message.contains("near 'id = 1'"), "{}", error.message);
     }
+
+    // Read-only mode: reads work, nothing can write, even smuggled.
+    let read = execute_read_only(&config, password, "SELECT count(*) AS n FROM graft_it_users", 10)
+        .await
+        .unwrap();
+    assert_eq!(read.rows[0][0], serde_json::json!(3));
+    for write in [
+        "DELETE FROM graft_it_orders",
+        "SELECT 1; DELETE FROM graft_it_orders",
+        "COMMIT; DELETE FROM graft_it_orders",
+        "CREATE TABLE graft_it_sneaky (a INT)",
+        "DROP TABLE graft_it_orders",
+    ] {
+        assert!(execute_read_only(&config, password, write, 10).await.is_err(), "{write} must be refused");
+    }
+    let still = databases.execute(&config, password, "SELECT count(*) FROM graft_it_orders", 10).await.unwrap();
+    assert_eq!(still.rows[0][0], serde_json::json!(2), "nothing was deleted");
 
     databases.execute(&config, password, TEARDOWN, 10).await.unwrap();
 

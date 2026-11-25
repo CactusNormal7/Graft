@@ -16,6 +16,15 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
   );
   const [password, setPassword] = useState("");
   const [hasStoredPassword, setHasStoredPassword] = useState(false);
+  const projectPath = useGraftStore((s) => s.projectPath);
+  const [allowClaudeWrites, setAllowClaudeWrites] = useState(false);
+
+  useEffect(() => {
+    if (!projectPath) return;
+    invoke<boolean>("get_mcp_writes", { path: projectPath })
+      .then(setAllowClaudeWrites)
+      .catch((e) => void showError("Could not read the Claude permissions", String(e)));
+  }, [projectPath]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -34,6 +43,7 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       await updateConnection(connection, password || undefined);
+      if (projectPath) await invoke("set_mcp_writes", { path: projectPath, allow: allowClaudeWrites });
       onClose();
     } catch (e) {
       void showError("Could not update the connection", String(e));
@@ -52,6 +62,19 @@ export function ConnectionModal({ onClose }: { onClose: () => void }) {
           onPasswordChange={setPassword}
           hasStoredPassword={hasStoredPassword}
         />
+        <label className="connection-form__permission">
+          <input
+            type="checkbox"
+            checked={allowClaudeWrites}
+            onChange={(e) => setAllowClaudeWrites(e.currentTarget.checked)}
+          />
+          <span>
+            Allow Claude (MCP) to modify this database
+            <span className="text-muted">
+              {" "}— off: Claude can only read. Stored on this computer, not in the project file.
+            </span>
+          </span>
+        </label>
         <div className="modal__actions">
           <button className="btn" onClick={onClose}>Cancel</button>
           <button className="btn-accent" disabled={!isUsable || busy} onClick={save}>

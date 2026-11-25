@@ -1372,6 +1372,11 @@ function touchRecent(
   );
   persistRecents(next);
   set({ recentProjects: next });
+  // The MCP server can only reach projects registered on disk (recents live
+  // in the webview's localStorage, out of its reach).
+  invoke("register_project", { path: entry.projectPath, name: entry.name }).catch((err) =>
+    console.error("register_project:", err),
+  );
 }
 
 // Keep `dirty` (UI indicator) and the backend's close/quit guard in sync with

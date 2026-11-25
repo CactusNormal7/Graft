@@ -79,6 +79,9 @@ src-tauri/src/
   dialogs.rs         Native dialogs (run from the backend)
   scope.rs           Session file-access grants
   lib.rs             Tauri builder + command registration
+src-tauri/crates/
+  graft-core/        Shared engine: db, .graft files, registry, secrets
+  graft-mcp/         MCP server (stdio) for Claude — works without the app
 ```
 
 ## Documentation

@@ -5,6 +5,7 @@
 
 pub mod db;
 pub mod files;
+pub mod inserts;
 pub mod notebook;
 pub mod registry;
 pub mod secrets;

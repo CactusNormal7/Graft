@@ -3,6 +3,7 @@ mod dialogs;
 mod lsp;
 mod menu;
 mod notebook;
+mod registry_commands;
 mod scope;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -89,6 +90,9 @@ pub fn run() {
             dialogs::pick_export_file,
             dialogs::confirm_dialog,
             set_unsaved_changes,
+            registry_commands::register_project,
+            registry_commands::get_mcp_writes,
+            registry_commands::set_mcp_writes,
             lsp::lsp_start,
             lsp::lsp_send,
         ])
